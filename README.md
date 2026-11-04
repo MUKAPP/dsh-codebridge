@@ -4,7 +4,7 @@
 
 让 **DSH 标准模式**也能用代码调用工具：执行 JavaScript / TypeScript，在同一会话中保留变量、函数、导入和中间结果，通过 `tools.*` 完成多步操作，再把需要的结果返回给模型。原有工具仍可直接调用。
 
-**兼容 DSH `0.2.1-rc.5` · Node.js `>=24.9.0` · MIT**
+**兼容 DSH `0.2.2-rc.1` · Node.js `>=24.9.0` · MIT**
 
 ## 安装
 
@@ -26,7 +26,8 @@ dsh plugin --profile web add https://github.com/MUKAPP/dsh-codebridge.git
 
 ## 能做什么
 
-- **会话级持久 REPL**：同一会话的变量、函数、导入和中间结果可在后续代码调用中继续使用；不同会话彼此隔离。
+- **可配置的会话状态**：默认在同一会话保留变量、函数和导入；可在设置页关闭，恢复每次独立执行。
+- **可选重启数据恢复**：自动保存受支持的顶层 JSON 数据变量，重启后按原变量名恢复，不重新运行历史代码。
 - **用代码串联工具**：支持条件判断、循环、结果筛选和汇总，减少模型往返与中间结果回传。
 - **先搜索摘要，再查结构**：按名称或描述筛选当前可用工具，再按需获取参数和规范返回值 schema；也可只读检查环境。
 - **按任务复杂度选择调用方式**：单步读取、写入或查询直接调用原生工具；需要两个或更多工具、循环、条件判断、批量筛选、分页处理或汇总时，先查询结构，再优先用 `codebridge_exec` 编排。
@@ -52,7 +53,7 @@ dsh plugin --profile web add https://github.com/MUKAPP/dsh-codebridge.git
 { "query": "文件", "limit": 20 }
 ```
 
-搜索不区分大小写，按去除首尾空白后的子串匹配；`query: ""` 浏览全部可见工具。默认仅返回名称和说明，不附带参数与返回结构。结果按名称排序，`total` 是匹配总数；有后续页时返回 `nextOffset`，以相同查询和该 `offset` 继续。`limit` 默认为 20，范围 1–100，`offset` 默认为 0。每次查询使用当时的可见工具集合，不是固定快照。
+搜索不区分大小写，按去除首尾空白后的子串匹配；`query: ""` 浏览全部可见工具。默认仅返回名称和说明，不附带参数与返回结构。结果按名称排序，`total` 是匹配总数；有后续页时返回 `nextOffset`，以相同查询和该 `offset` 继续。`limit` 默认为 20，范围 1–100，`offset` 默认为 0。每次查询使用当时的可见工具集合，并遵守当前模型步骤的工具准入结果，不是固定快照。
 
 找到目标后，用精确名称查询完整结构，例如：
 
@@ -86,9 +87,9 @@ total()
 values.filter(value => value >= 8).map(value => value * 2)
 ```
 
-会话状态只存在于当前 runtime 进程；插件重载、进程重启、权限变化、超时或部分运行时失败都可能清空它。文件写入、网络请求和其他外部副作用不会因为代码失败而回滚。
+默认只在当前进程内保留会话状态。开启下文的“重启后恢复”后，插件会额外保存支持的顶层 JSON 数据变量，进程重启后从最近快照恢复数据；函数、模块和句柄不恢复。文件写入、网络请求和其他外部副作用不会因为代码失败而回滚。
 
-代码工具的规范返回值包含 `logs`，并可包含 `result`、`sandbox` 和 `preview`。`console.log()` 写入日志，最后一个表达式提供 `result`；返回值必须是无损 JSON。日志和返回值同时存在时，展示文本会分区标明。
+代码工具的规范返回值包含 `logs`，并可包含 `result`、`sandbox`、`preview` 和 `snapshot`。`console.log()` 写入日志，最后一个表达式提供 `result`；返回值必须是无损 JSON。日志和返回值同时存在时，展示文本会分区标明。
 
 ### 大输出与全文访问
 
@@ -106,7 +107,7 @@ values.filter(value => value >= 8).map(value => value * 2)
 { "diagnostics": true }
 ```
 
-也可同时传入 `names` 查询工具结构。返回的 `diagnostics` 包括当前目录、会话文件权限、专用运行时的语言/执行形式/隔离类型/状态保留范围/恢复限制/超时能力，以及全文存储是否已挂载。`stateRetention: "session"` 表示同一会话的代码调用共享运行环境；`stateRecovery: "process-only"` 表示状态不承诺跨进程恢复。`configurationReady` 仅表示这些配置检查未发现问题；不会启动进程、检查目录存在性、修改配置或证明沙箱完整隔离。输出硬上限请查看运行时配置。
+也可同时传入 `names` 查询工具结构。返回的 `diagnostics` 包括当前目录、会话文件权限、专用运行时的语言/执行形式/隔离类型/状态保留范围/恢复限制/超时能力，以及全文存储是否已挂载。`stateRetention: "session"` 表示同一会话的代码调用共享运行环境；`stateRecovery: "process-only"` 表示未启用重启恢复，`"json-snapshot"` 表示已启用受限的 JSON 数据快照。诊断中的 `retainSessionState` 与 `restoreOnRestart` 反映当前设置。`configurationReady` 仅表示这些配置检查未发现问题；不会启动进程、检查目录存在性、修改配置或证明沙箱完整隔离。输出硬上限请查看运行时配置。
 
 专用运行时缺失时，应恢复整个 `dsh-codebridge` 组合包及其命名隔离配置；单独启用公共 Node 运行时可能无效。
 
@@ -127,9 +128,28 @@ Web 会话中的执行状态显示当前阶段、当前子工具以及已提交�
 ## 执行规则
 
 - **子调用串行**：提交多个 Promise 也不代表工具并行。所有异步工具调用都要 `await`，程序结束时未完成的调用会被取消并等待收尾。取消或超时后仍需等待在途工具、日志及已开始的全文保存结束，`timeoutMs` 不代表包含这些收尾工作的总返回时限。
-- **会话状态**：同一会话的代码调用共享变量和函数，但状态只存在于当前 runtime 进程；插件重载、进程重启、权限变化、超时或部分运行时失败都可能清空它。已发生的文件写入或外部请求不会因报错、超时而回滚。
+- **会话状态**：是否共享 REPL 由“保留会话状态”控制；重启恢复仅覆盖受支持的数据快照，不是进程内存镜像。已发生的文件写入或外部请求不会因报错、超时而回滚。
 - **遵守作用域**：只能调用当前代理可见工具，不提供递归调用 CodeBridge 或 `run_code` 的入口。代码工具本身没有提权参数。
 - **沙箱沿用宿主**：Node 文件、网络和子进程操作受实际宿主策略约束。Windows 后端可能报告 `partial`，不能将其视为完整隔离。
+
+## 插件设置与重启恢复
+
+在 **设置 → 插件 → CodeBridge** 中修改两个开关，点击保存后生效；也可逐项恢复继承值。配置属于当前 profile，使用该 profile 的会话共享设置。
+
+每次模型请求前，插件都会提供当前的 **CodeBridge 代码执行状态**：开启保留时说明可复用绑定，关闭时明确要求每次代码自包含，并说明重启恢复是否实际生效。设置热更新后，后续请求直接读取新值，无需模型主动查询诊断；即使关闭宿主的可选运行时上下文，这条状态提示也会保留。提示反映当前配置，不保证对话历史中的旧变量仍然存在，恢复情况仍以实际工具结果为准。
+
+| 设置 | 配置键 | 默认 | 行为 |
+| --- | --- | --- | --- |
+| 保留会话状态 | `retainSessionState` | 开启 | 同一会话复用 Node REPL；关闭后下一次调用释放旧环境，并以新环境执行 |
+| 重启后恢复 | `restoreOnRestart` | 关闭 | 需同时开启会话保留；自动保存与恢复受支持的顶层 JSON 数据变量 |
+
+修改这两个设置会在下一次代码调用前释放旧环境和恢复基线，避免重新打开开关时复活旧数据。恢复功能从新环境中的代码调用开始追踪顶层 `const`、`let`、`var` 声明，包括解构。后续调用会更新已追踪变量的快照；恢复只注入数据，不重跑原始代码，因此不会为了恢复数据而重复调用工具、写文件或发起网络请求。
+
+只支持有限数字、字符串、布尔值、`null` 和普通 JSON 数组/数据对象。函数、模块、类实例、Promise、进程句柄、getter、Proxy、循环或共享引用等不在恢复范围；嵌套作用域及直接给 `globalThis` 添加的属性也不自动追踪。不支持的绑定会列入 `snapshot.omitted`，不能把没有列出的进程资源当作仍然存在。每次快照的完整记录上限为 1 MiB；超限会提示并使旧快照失效，不会把旧数据当成最新状态恢复。
+
+工具结果的 `snapshot.saved` 表示快照已保存并得到持久化确认，`restored` 列出本次恢复的变量，`warning` 说明未保存或未保证持久的原因。代码已经执行成功但保存失败时不会自动重跑；不要为获得快照而重复具有副作用的操作。已开始执行的调用若失败或取消，会使旧恢复基线失效，避免后续从旧数据误恢复。
+
+快照与会话日志一起保存，可能包含代码读取的数据；开启前应确认适合保存这些数据。关闭恢复会停止保存并清除后续恢复基线，但不是物理删除旧会话日志中的历史数据。会话文件删除、损坏、权限策略变化或快照限制可能使数据无法恢复。
 
 ## 配置与更新
 
@@ -139,12 +159,12 @@ Web 会话中的执行状态显示当前阶段、当前子工具以及已提交�
 
 | 配置 | 默认值 | 含义 |
 | --- | --- | --- |
-| `executionMode` | `persistent-in-memory` | 每个会话保留一个 Node REPL；进程重启后状态不恢复 |
+| `executionMode` | `persistent-in-memory` | 每个会话保留一个 Node REPL；可选 JSON 数据快照恢复 |
 | `timeoutMs` | `120000` | 默认执行超时，毫秒 |
 | `maxTimeoutMs` | `600000` | 单次超时参数的上限，毫秒 |
 | `maxOutputBytes` | `67108864` | 日志与结果的合计输出上限，64 MiB |
 
-CodeBridge 要求 `codebridge-runtime` 保持 `persistent-in-memory` 和 `programFormat: "repl"`；手动改回 `per-call` 时，`codebridge_tools({ diagnostics: true })` 会报告配置未就绪，代码执行也会明确拒绝，避免把 REPL 末尾表达式误交给函数体 runtime。使用带 `process.pkg` 的单文件 DSH 宿主时，官方 runtime 还要求把持久 worker 配置为 `node-script`，并提供外部 Node executable 与 `persistent-process.js` bootstrap；当前组合包验证覆盖标准 Electron/Node 载体，单文件宿主需要按宿主部署方式补充这项 runtime 配置。
+CodeBridge 要求 `codebridge-runtime` 保持 `persistent-in-memory` 和 `programFormat: "repl"`；手动改回 `per-call` 时，`codebridge_tools({ diagnostics: true })` 会报告配置未就绪，代码执行也会明确拒绝，避免把 REPL 末尾表达式误交给函数体 runtime。使用带 `process.pkg` 的单文件 DSH 宿主时，官方 runtime 还要求把持久 worker 配置为 `node-script`，并提供外部 Node executable 与 `process.js` bootstrap；当前组合包验证覆盖标准 Electron/Node 载体，单文件宿主需要按宿主部署方式补充这项 runtime 配置。
 
 升级后必须重新加载整个 `dsh-codebridge` 组合包，使工具与专用运行时一起更新为持久模式；仅刷新浏览器不会更换 Host runtime。卸载时关闭或移除整个组合包，等待会话资源释放。
 
@@ -153,11 +173,13 @@ CodeBridge 要求 `codebridge-runtime` 保持 `persistent-in-memory` 和 `progra
 使用 pnpm `11.28.5`。克隆仓库后，在项目目录执行：
 
 ```sh
-pnpm install --ignore-scripts
+pnpm install --ignore-scripts --config.strict-dep-builds=false
 pnpm run typecheck
 pnpm run build
 pnpm test
 ```
+
+安装命令跳过依赖安装脚本，并允许 pnpm 在跳过依赖构建时继续；随后显式编译 Host 与 Web 客户端。
 
 构建结果位于 `lib/`；测试使用这些构建结果。完成构建后，可在 DSH 插件管理器中以本项目的绝对目录作为本地安装来源。生成安装包：
 
@@ -166,6 +188,8 @@ pnpm pack --pack-destination artifacts
 ```
 
 [独立验证入口](verification/run.mjs) 接受 Node 或 Electron 可执行文件路径及对应的 `dsh` CLI 入口，Electron 额外传入 `--electron`。它通过公开 CLI 在 `verification/.profile` 下创建独立环境，不需要模型 API key，也不改动现有 desktop profile。
+
+添加 `--restart` 可在 `verification/.profile/restart` 中运行真实 JSONL 持久化和两个独立 DSH Host 进程，验证变量恢复、不重复执行外部操作、会话隔离和设置服务热更新。
 
 已有验证覆盖工具可见性、规范 JSON、串行调度、取消与卸载、会话隔离，以及真实 Node 子进程中的超时恢复、深层 JSON 和只读写入拒绝。开发规则见 [AGENTS.md](AGENTS.md)。
 

@@ -7,8 +7,9 @@ import { spawn } from 'node:child_process'
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const executable = process.argv[2]
 const entry = process.argv[3]
-if (!executable || !entry) throw new Error('Usage: node verification/run.mjs <node-or-electron> <dsh-cli-entry> [--electron]')
-const home = join(root, 'verification', '.profile')
+if (!executable || !entry) throw new Error('Usage: node verification/run.mjs <node-or-electron> <dsh-cli-entry> [--electron] [--restart]')
+const restart = process.argv.includes('--restart')
+const home = join(root, 'verification', '.profile', ...(restart ? ['restart'] : []))
 const profile = join(home, 'profiles', 'codebridge-verify')
 const workspace = join(home, 'workspace')
 mkdirSync(join(profile, 'node_modules'), { recursive: true })
@@ -25,13 +26,45 @@ writeFileSync(join(profile, 'package.json'), JSON.stringify({
   dsh: { profile: { bundles: ['dsh-codebridge'] } },
 }, null, 2) + '\n')
 const patch = readFileSync(join(root, 'verification', 'profile.patch.yml'), 'utf8')
-const probe = join(root, 'verification', 'probe.mjs').replaceAll('\\', '/')
+const probe = join(root, 'verification', restart ? 'restart-probe.mjs' : 'probe.mjs').replaceAll('\\', '/')
 writeFileSync(join(profile, 'cordis.patch.yml'), `${patch}    - id: verification\n      name: '${probe.replaceAll("'", "''")}'\n`)
-const env = { ...process.env, DSH_HOME: home }
+if (restart) {
+  const storage = join(home, 'sessions').replaceAll('\\', '/')
+  const restartPatch = `- id: codebridge
+  config:
+    retainSessionState: true
+    restoreOnRestart: true
+- insert:
+    - id: restart-persistence
+      name: '@deepseek-ai/dsh-session-persistence-jsonl'
+      config:
+        root: '${storage.replaceAll("'", "''")}'
+        compression: none
+    - id: restart-config-editor
+      name: '@deepseek-ai/dsh-config-editor'
+    - id: restart-settings
+      name: '@deepseek-ai/dsh-settings'
+`
+  writeFileSync(join(profile, 'cordis.patch.yml'), `${readFileSync(join(profile, 'cordis.patch.yml'), 'utf8')}\n${restartPatch}`)
+}
+const env = { ...process.env, DSH_HOME: home, CODEBRIDGE_RESTART_ID: `codebridge-restart-${Date.now()}` }
 if (process.argv.includes('--electron')) env.ELECTRON_RUN_AS_NODE = '1'
-const child = spawn(executable, [entry, '--profile', 'codebridge-verify'], { cwd: workspace, env, stdio: 'inherit' })
-child.on('error', error => { console.error(error); process.exitCode = 1 })
-child.on('exit', (code, signal) => {
-  if (signal) console.error(`Verification terminated by ${signal}`)
-  process.exitCode = code ?? 1
-})
+for (const phase of restart ? ['seed', 'restore'] : ['default']) {
+  const code = await new Promise((resolve, reject) => {
+    const child = spawn(executable, [entry, '--profile', 'codebridge-verify'], {
+      cwd: workspace, env: { ...env, CODEBRIDGE_RESTART_PHASE: phase }, stdio: ['inherit', 'pipe', 'inherit'],
+    })
+    let output = ''
+    child.stdout.on('data', chunk => { process.stdout.write(chunk); output = (output + chunk.toString()).slice(-16384) })
+    child.on('error', reject)
+    child.on('exit', (code, signal) => {
+      if (signal) console.error(`Verification terminated by ${signal}`)
+      const expected = phase === 'seed' ? 'CODEBRIDGE_RESTART_SEEDED' : phase === 'restore' ? 'CODEBRIDGE_RESTART_VERIFIED' : 'CODEBRIDGE_VERIFIED'
+      if (code === 0 && !output.includes(expected)) {
+        console.error(`Verification did not reach ${expected}`)
+        resolve(1)
+      } else resolve(code ?? 1)
+    })
+  })
+  if (code !== 0) { process.exitCode = code; break }
+}

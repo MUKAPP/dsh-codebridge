@@ -4,6 +4,11 @@ import type { SandboxExecutionPolicy } from '@deepseek-ai/dsh-sandbox'
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-sandbox-policy'
 import type {} from '@deepseek-ai/dsh-session'
+import type {} from '@deepseek-ai/cordis-plugin-loader'
+
+export interface LifecycleConfig {
+  retainSessionState: { get(): boolean }
+}
 
 interface ActiveCall {
   state: SessionState
@@ -15,14 +20,16 @@ interface ActiveCall {
 interface SessionState {
   readonly session: object
   readonly sessionId: string
-  readonly owner: object
+  owner: object | undefined
+  retained: boolean
+  retentionEpoch: number
   readonly runtimes: Map<object, PtcRuntime>
   tail: Promise<void>
   release?: Promise<void>
 }
 
 type CallBody<T> = (
-  signal: AbortSignal, policy: SandboxExecutionPolicy, stateOwner: object, runtime: PtcRuntime | undefined,
+  signal: AbortSignal, policy: SandboxExecutionPolicy, stateOwner: object | undefined, runtime: PtcRuntime | undefined,
 ) => Promise<T>
 
 /** 拥有完整代码调用，包含运行时启动前等待、会话状态串行化和子工具收尾。 */
@@ -31,10 +38,17 @@ export class CallLifecycle {
   private readonly sessions = new Map<object, SessionState>()
   private readonly disposedSessions = new WeakSet<object>()
   private disposed = false
+  private retentionEpoch = 0
   private readonly policy
 
-  constructor(private readonly ctx: Context) {
+  constructor(
+    private readonly ctx: Context, private readonly config: LifecycleConfig,
+    private readonly clearSnapshot?: (exec: ToolRunContext) => Promise<unknown>,
+  ) {
     this.policy = ctx.sandboxPolicy
+    ctx.on('loader/volatile-update', paths => {
+      if (paths.some(path => path[0] === 'retainSessionState' || path[0] === 'restoreOnRestart')) this.retentionEpoch++
+    })
     ctx.on('session/event', (session, event) => {
       if (event.type !== 'sandbox/mode') return
       for (const call of this.calls) {
@@ -70,6 +84,8 @@ export class CallLifecycle {
       started = true
       if (this.disposed || this.disposedSessions.has(state.session)) throw new Error('CodeBridge 会话状态已释放。')
       exec.signal.throwIfAborted()
+      await this.syncRetention(state, exec)
+      if (this.disposed || this.disposedSessions.has(state.session)) throw new Error('CodeBridge 会话状态已释放。')
       return this.runActive(exec, state, body)
     })
     state.tail = operation.then(() => {}, () => {})
@@ -93,9 +109,32 @@ export class CallLifecycle {
       if (existing.sessionId !== sessionId) throw new Error('CodeBridge 会话标识已变化。')
       return existing
     }
-    const state: SessionState = { session, sessionId, owner: {}, runtimes: new Map(), tail: Promise.resolve() }
+    const retained = this.config.retainSessionState.get()
+    const state: SessionState = {
+      session,
+      sessionId,
+      owner: retained ? {} : undefined,
+      retained,
+      retentionEpoch: 0,
+      runtimes: new Map(),
+      tail: Promise.resolve(),
+    }
     this.sessions.set(session, state)
     return state
+  }
+
+  private async syncRetention(state: SessionState, exec: ToolRunContext): Promise<void> {
+    const retained = this.config.retainSessionState.get()
+    if (retained === state.retained && state.retentionEpoch === this.retentionEpoch) return
+    if (state.owner !== undefined) {
+      await this.releaseOwnedState(state)
+      state.owner = undefined
+      state.retained = false
+    }
+    await this.clearSnapshot?.(exec)
+    state.owner = retained ? {} : undefined
+    state.retained = retained
+    state.retentionEpoch = this.retentionEpoch
   }
 
   private async runActive<T>(exec: ToolRunContext, state: SessionState, body: CallBody<T>): Promise<T> {
@@ -103,7 +142,7 @@ export class CallLifecycle {
     const policy = this.policy.resolve({ session: exec.agent!.session })
     // 在排队真正准入时读取 provider；释放始终使用这个实际接收 owner 的 generation。
     const runtime = this.ctx.get('ptcRuntime')
-    if (runtime !== undefined) state.runtimes.set(this.identity(runtime), runtime)
+    if (runtime !== undefined && state.owner !== undefined) state.runtimes.set(this.identity(runtime), runtime)
     const controller = new AbortController()
     const done = Promise.withResolvers<void>()
     const call: ActiveCall = { state, mode: policy.mode, controller, done: done.promise }
@@ -131,12 +170,11 @@ export class CallLifecycle {
     return state.release
   }
 
-  private async drainSession(state: SessionState): Promise<void> {
-    // release 不进入 tail：tail 只等待调用及子调用日志，避免互相等待。
-    await state.tail
-    const results = await Promise.allSettled([...state.runtimes.values()].map(async runtime => {
+  private async releaseOwnedState(state: SessionState): Promise<void> {
+    const results = await Promise.allSettled([...state.runtimes.entries()].map(async ([key, runtime]) => {
       try {
-        await runtime.release(state.owner)
+        if (state.owner !== undefined) await runtime.release(state.owner)
+        state.runtimes.delete(key)
       } catch (error) {
         this.ctx.logger.warn('CodeBridge 会话 %s 状态释放失败：%s', state.sessionId, String(error))
         throw error
@@ -144,6 +182,12 @@ export class CallLifecycle {
     }))
     const errors = results.filter(result => result.status === 'rejected').map(result => result.reason)
     if (errors.length > 0) throw new AggregateError(errors, 'CodeBridge 会话状态释放失败。')
+  }
+
+  private async drainSession(state: SessionState): Promise<void> {
+    // release 不进入 tail：tail 只等待调用及子调用日志，避免互相等待。
+    await state.tail
+    await this.releaseOwnedState(state)
     this.sessions.delete(state.session)
   }
 }

@@ -2,11 +2,13 @@ import assert from 'node:assert/strict'
 import { Context } from '@deepseek-ai/cordis'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime, { defineTool } from '@deepseek-ai/dsh-tools'
+import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
+import { ToolExecutionPipeline } from '@deepseek-ai/dsh-tools/pipeline'
 import { PtcRuntime } from '@deepseek-ai/dsh-ptc-runtime'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import * as CodeBridge from '../lib/index.js'
 
-// Only the provider seam is scripted; registry dispatch remains real rc.5.
+// Only the provider seam is scripted; dispatch uses the real rc.1 shared pipeline.
 class FakeRuntime extends PtcRuntime {
   language = 'typescript'
   isolation = 'fake'
@@ -38,16 +40,18 @@ export async function setup(t, options = {}) {
     resolve: ({ session }) => ({ mode: policies.get(session.id) ?? options.mode ?? 'workspace-write', workspaceRoot: session.header.cwd }),
   })
   await ctx.plugin(SystemPrompt)
-  await ctx.plugin(ToolRuntime, { mode: 'native' })
+  await ctx.plugin(ToolRuntime)
+  await ctx.plugin(NativeToolExecutor)
+  const pipeline = new ToolExecutionPipeline(ctx)
   let runtimePlugin
   if (options.runtime !== false) {
     runtimePlugin = ctx.plugin(FakeRuntime, options.runtime ?? {})
     await runtimePlugin
   }
-  const plugin = ctx.plugin(CodeBridge)
+  const plugin = ctx.plugin(CodeBridge, options.config ?? {})
   await plugin
   const fixture = {
-    ctx, gate, policies, ensured, plugin, runtime: ctx.get('ptcRuntime'),
+    ctx, pipeline, gate, policies, ensured, plugin, runtime: ctx.get('ptcRuntime'),
     async removeRuntime() { await runtimePlugin?.dispose(); fixture.runtime = undefined },
     async installRuntime(options = {}) {
       runtimePlugin = ctx.plugin(FakeRuntime, options)
@@ -70,7 +74,11 @@ export async function setup(t, options = {}) {
 }
 
 let nextCall = 0
-export function invoke(f, name, args, extras = {}) { return f.ctx.tools.execute({ callId: `call-${++nextCall}`, name, arguments: args, agent: f.agent, signal: new AbortController().signal, ...extras }) }
+export async function invoke(f, name, args, extras = {}) {
+  const prepared = await f.pipeline.prepare({ callId: `call-${++nextCall}`, name, arguments: args, agent: f.agent, signal: new AbortController().signal, ...extras })
+  const outcome = prepared.kind === 'dispatch' ? await f.pipeline.dispatch(prepared.exec) : prepared
+  return f.pipeline.complete(prepared.exec, outcome)
+}
 export function execute(f, args = {}, extras = {}) { return invoke(f, 'codebridge_exec', { code: 'return null', description: 'Run fixture', ...args }, extras) }
 export function register(f, name = 'echo', overrides = {}, owner = f.ctx) {
   owner.tools.register(defineTool({

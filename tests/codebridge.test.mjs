@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { setImmediate as checkpoint } from 'node:timers/promises'
-import { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
+import { defineContentToolFixture } from '@deepseek-ai/dsh-tool-testkit'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { setup, invoke, execute, register, functions, text, ok, failed } from './fixture.mjs'
 

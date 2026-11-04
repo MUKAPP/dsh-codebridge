@@ -5,6 +5,9 @@ import type {} from '@deepseek-ai/dsh-sandbox-policy'
 import type {} from '@deepseek-ai/dsh-working-directory'
 import type {} from '@deepseek-ai/dsh-spill'
 import { DEFAULT_INLINE_BYTES } from './output.js'
+import type { Config } from './config.js'
+import type {} from '@deepseek-ai/dsh-session-projection'
+import type {} from '@deepseek-ai/dsh-session-persistence'
 
 export const RUNTIME_MISSING_MESSAGE = '未挂载 CodeBridge 专用 PTC 运行时；请启用 dsh-codebridge 组合包中的 codebridge-runtime（@deepseek-ai/dsh-ptc-runtime-node），并确保它与 codebridge 使用相同的 dsh-codebridge-runtime 隔离配置。仅启用公共运行时不能修复此问题。'
 
@@ -26,7 +29,9 @@ export const diagnosticsSchema = {
         isolation: { type: 'string' },
         programFormat: { type: 'string' },
         stateRetention: { type: 'string', enum: ['session', 'call', 'unknown'] },
-        stateRecovery: { type: 'string', enum: ['process-only', 'durable', 'unknown'] },
+        stateRecovery: { type: 'string', enum: ['process-only', 'json-snapshot', 'unknown'] },
+        retainSessionState: { type: 'boolean' },
+        restoreOnRestart: { type: 'boolean' },
         filePolicySupported: { type: 'boolean' },
         timeout: {
           type: 'object', additionalProperties: false,
@@ -43,7 +48,7 @@ export const diagnosticsSchema = {
 } as const
 
 /** 仅读取当前会话与公开运行时能力，不启动进程、不修复或改变工作目录。 */
-export function collectDiagnostics(ctx: Context, exec: ToolRunContext) {
+export function collectDiagnostics(ctx: Context, exec: ToolRunContext, config: Config) {
   exec.signal.throwIfAborted()
   if (exec.agent === undefined) throw new Error('CodeBridge 环境诊断需要当前代理会话。')
   const policy = ctx.sandboxPolicy.resolve({ session: exec.agent.session })
@@ -57,8 +62,13 @@ export function collectDiagnostics(ctx: Context, exec: ToolRunContext) {
       issues.push(`当前运行时无法实施会话的 ${policy.mode} 文件权限。`)
     }
   }
+  const retainSessionState = config.retainSessionState.get()
+  const restoreOnRestart = config.restoreOnRestart.get()
+  if (retainSessionState && restoreOnRestart && (ctx.get('sessionProjections') === undefined || ctx.get('sessions') === undefined || ctx.get('sessionPersistence') === undefined)) {
+    issues.push('重启恢复需要会话投影与会话持久化服务。')
+  }
   const timeout = runtime?.timeout
-  const stateRetention: 'session' | 'call' = runtime?.programFormat === 'repl' ? 'session' : 'call'
+  const stateRetention: 'session' | 'call' = retainSessionState && runtime?.programFormat === 'repl' ? 'session' : 'call'
   return {
     configurationReady: issues.length === 0,
     cwd: ctx.workingDirectory.get(exec.agent.session),
@@ -71,11 +81,13 @@ export function collectDiagnostics(ctx: Context, exec: ToolRunContext) {
       isolation: runtime.isolation,
       programFormat: runtime.programFormat,
       stateRetention,
-      stateRecovery: stateRetention === 'session' ? 'process-only' as const : 'unknown' as const,
+      stateRecovery: stateRetention === 'session' && restoreOnRestart ? 'json-snapshot' as const : 'process-only' as const,
+      retainSessionState,
+      restoreOnRestart,
       filePolicySupported: runtime.sandboxMode !== undefined,
       ...(timeout === undefined ? {} : { timeout }),
     },
     issues,
-    note: '仅检查配置与声明能力，未启动运行时、检查目录存在性或验证实际沙箱隔离。代码在同一会话内使用持久 REPL，子调用仍串行；运行时输出硬上限请查看 codebridge-runtime 配置。',
+    note: '仅检查配置与声明能力，未启动运行时、检查目录存在性或验证实际沙箱隔离。会话保留和 JSON 快照恢复按插件设置生效，子调用仍串行；运行时输出硬上限请查看 codebridge-runtime 配置。',
   }
 }

@@ -11,7 +11,7 @@ export const DESCRIBE_NAME = 'codebridge_tools'
 export const EXCLUDED_TOOLS: ReadonlySet<string> = new Set([EXEC_NAME, DESCRIBE_NAME, 'run_code'])
 
 /** 搜索先返回摘要，精确名称查询保持完整结构兼容。 */
-export function createDescribeTool(ctx: Context) {
+export function createDescribeTool(ctx: Context, config: import('./config.js').Config) {
   const tools = ctx.tools
   return defineTool({
     name: DESCRIBE_NAME,
@@ -62,11 +62,11 @@ export function createDescribeTool(ctx: Context) {
       const limit = searching ? (args.limit ?? 20) : 20
       if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('offset 必须是非负安全整数。')
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error('limit 必须是 1–100 的整数。')
-      const diagnostics = args.diagnostics ? collectDiagnostics(ctx, exec) : undefined
-      const schemas = new Map(tools.schemas(exec.agent).map(schema => [schema.name, schema]))
+      const diagnostics = args.diagnostics ? collectDiagnostics(ctx, exec, config) : undefined
+      const schemas = new Map(tools.schemas(exec.agent, exec.toolSet).map(schema => [schema.name, schema]))
       const query = args.query?.trim().toLowerCase() ?? ''
       const matches = searching ? [...schemas.values()].filter(schema =>
-        !EXCLUDED_TOOLS.has(schema.name) && tools.get(schema.name, exec.agent) !== undefined
+        !EXCLUDED_TOOLS.has(schema.name) && tools.executable(schema.name, exec.agent, exec.toolSet) !== undefined
         && (schema.name.toLowerCase().includes(query) || schema.description.toLowerCase().includes(query)),
       ).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0) : []
       const selected = searching ? matches.slice(offset, offset + limit).map(schema => schema.name) : [...new Set(names)]
@@ -75,7 +75,7 @@ export function createDescribeTool(ctx: Context) {
       const unavailable: string[] = []
       for (const name of selected) {
         const schema = schemas.get(name)
-        const definition = tools.get(name, exec.agent)
+        const definition = tools.executable(name, exec.agent, exec.toolSet)
         if (EXCLUDED_TOOLS.has(name) || schema === undefined || definition === undefined) {
           unavailable.push(name)
         } else {

@@ -36,10 +36,13 @@ export function apply(ctx) {
     const scope = createScope(ctx, agent)
     agent.ctx = scope.ctx
     let call = 0
-    const invoke = (name, args) => ctx.tools.execute({
-      callId: ToolCallId(`verify-${++call}`), name, arguments: args,
-      agent, signal: new AbortController().signal,
-    })
+    const invoke = async (name, args) => {
+      const batch = await ctx.tools.execute({
+        calls: [{ type: 'tool-call', id: ToolCallId(`verify-${++call}`), name, arguments: JSON.stringify(args) }],
+        agent, signal: new AbortController().signal,
+      })
+      return batch.results[0].result
+    }
     const exec = (code, timeoutMs) => invoke('codebridge_exec', {
       description: 'CodeBridge independent profile verification', code,
       ...(timeoutMs === undefined ? {} : { timeoutMs }),
@@ -111,7 +114,7 @@ export function apply(ctx) {
       assert(['EACCES', 'EPERM'].includes(confined.value.result.code), JSON.stringify(confined.value.result))
       setSandboxMode(session, 'danger-full-access')
       const evidence = {
-        runtime: '0.2.1-rc.5', nativeDirect: true, catalog: true,
+        runtime: '0.2.2-rc.1', nativeDirect: true, catalog: true,
         hostPid: process.pid, childPid: first.value.result.pid,
         typescript: true, guardedBinding: true, typedToolError: true,
         nestedEventPairs: ends.length, timeoutAndRecovery: true, persistentSessionMemory: true,

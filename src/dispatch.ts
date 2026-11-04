@@ -4,9 +4,14 @@ import { createUserMessage, HarnessError } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, ToolCallId, ToolSchema } from '@deepseek-ai/dsh-llm'
 import type { PtcBindingFunction } from '@deepseek-ai/dsh-ptc-runtime'
 import { scopeTarget } from '@deepseek-ai/dsh-scope'
-import type { ToolExecutionResult, ToolRunContext } from '@deepseek-ai/dsh-tools'
+import type { ToolExecutionInput, ToolExecutionResult, ToolRunContext } from '@deepseek-ai/dsh-tools'
+import { ToolExecutionPipeline } from '@deepseek-ai/dsh-tools/pipeline'
+import type { ScheduledToolDispatch } from '@deepseek-ai/dsh-tools/pipeline'
 import { deepFreeze, snapshotJsonValue } from '@deepseek-ai/dsh-util-values'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
+// 子调用沿用宿主 PTC 的会话事件与消息来源声明，不重复定义同名事件。
+import type {} from '@deepseek-ai/dsh-tool-executor-ptc/types'
+import type {} from '@deepseek-ai/dsh-tool-executor-ptc'
 import { EXCLUDED_TOOLS } from './catalog.js'
 import type { ExecutionProgress } from './progress.js'
 
@@ -17,11 +22,14 @@ export class SerialDispatch {
   lastFailure: { toolName: string; callId: string; code?: string } | undefined
   private fatal: { error: unknown } | undefined
   private readonly tools
+  private readonly pipeline: ToolExecutionPipeline
   readonly functions: Record<string, PtcBindingFunction> = Object.create(null)
 
   constructor(private readonly ctx: Context, private readonly exec: ToolRunContext, private readonly controller: AbortController, private readonly progress: ExecutionProgress) {
     this.tools = ctx.tools
-    for (const schema of this.tools.schemas(exec.agent)) {
+    // 子调用与原生调用共用同一策略、守卫与结果结算管线。
+    this.pipeline = new ToolExecutionPipeline(ctx)
+    for (const schema of this.tools.schemas(exec.agent, exec.toolSet)) {
       if (EXCLUDED_TOOLS.has(schema.name)) continue
       const frozen = deepFreeze(schema)
       Object.defineProperty(this.functions, schema.name, {
@@ -47,20 +55,25 @@ export class SerialDispatch {
     this.controller.signal.throwIfAborted()
     const loggedArguments = snapshotJsonValue(args)
     const ids = { rootCallId: this.exec.rootCallId, parentCallId: this.exec.callId, subCallId, name: schema.name, arguments: loggedArguments }
+    const input: ToolExecutionInput = {
+      callId: subCallId,
+      rootCallId: this.exec.rootCallId,
+      name: schema.name,
+      schema,
+      arguments: args,
+      ...(this.exec.agent === undefined ? {} : { agent: this.exec.agent }),
+      ...(this.exec.toolSet === undefined ? {} : { toolSet: this.exec.toolSet }),
+      parent: this.exec.token,
+      signal: this.controller.signal,
+    }
     let result: ToolExecutionResult
     try {
       this.exec.agent?.session.append('tool/ptc-dispatch-start', ids)
       this.progress.start(schema.name)
-      result = await this.tools.execute({
-        callId: subCallId,
-        rootCallId: this.exec.rootCallId,
-        name: schema.name,
-        schema,
-        arguments: args,
-        agent: this.exec.agent,
-        parent: this.exec.token,
-        signal: this.controller.signal,
-      })
+      const prepared = await this.pipeline.prepare(input)
+      const outcome: ScheduledToolDispatch = prepared.kind === 'dispatch'
+        ? await this.pipeline.dispatch(prepared.exec) : prepared
+      result = await this.pipeline.complete(prepared.exec, outcome)
       if (!result.isError && result.content.some(block => block.type === 'image')) {
         this.exec.deferContext(createUserMessage({ content: result.content, source: { kind: 'ptc-mode' } }))
       }

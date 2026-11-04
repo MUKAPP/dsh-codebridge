@@ -6,6 +6,7 @@ import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type {} from '@deepseek-ai/dsh-spill'
 import { renderJson } from './json.js'
+import type { SnapshotStatus } from './state.js'
 
 export const DEFAULT_INLINE_BYTES = 32 * 1024
 export const MAX_INLINE_BYTES = 256 * 1024
@@ -32,6 +33,7 @@ export interface ExecutionOutput {
   result?: JsonValue
   sandbox?: PtcRunSandbox
   preview?: OutputPreview
+  snapshot?: SnapshotStatus
 }
 
 /** 小结果保持可直接阅读的原文；日志和返回值同时存在时明确分区。 */
@@ -43,6 +45,9 @@ export function renderExecutionOutput(value: ExecutionOutput): string {
     const result = typeof value.result === 'string' ? value.result : renderJson(value.result)
     chunks.push(`${value.logs.length === 0 ? '' : '返回值：\n'}${result}`)
   }
+  if (value.snapshot?.restored?.length) chunks.push(`已恢复数据变量：${value.snapshot.restored.join(', ')}。`)
+  if (value.snapshot?.omitted.length) chunks.push(`未保存的绑定：${value.snapshot.omitted.join(', ')}。`)
+  if (value.snapshot?.warning) chunks.push(`重启恢复提示：${value.snapshot.warning}`)
   if (value.sandbox?.enforcement === 'partial') chunks.push('当前宿主仅部分实施文件沙箱限制。')
   if (value.sandbox?.denied) chunks.push(`文件操作被 ${value.sandbox.mode} 沙箱拒绝。`)
   return chunks.join('\n') || '代码执行完成，无输出。'

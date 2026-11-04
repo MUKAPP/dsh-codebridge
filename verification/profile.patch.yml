@@ -10,8 +10,8 @@
         includeRuntimeContext: false
     - id: tools
       name: '@deepseek-ai/dsh-tools'
-      config:
-        mode: native
+    - id: native-tool-executor
+      name: '@deepseek-ai/dsh-tool-executor-native'
     - id: filesystem
       name: '@deepseek-ai/dsh-fs-local'
     - id: working-directory

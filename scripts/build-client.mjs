@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 const root = new URL('../', import.meta.url)
 const manifest = JSON.parse(await readFile(new URL('package.json', root), 'utf8'))
 
-// rc.5 loads client plugins as closure factories, with React shared by the shell.
+// DSH loads client plugins as closure factories, with React shared by the shell.
 await build({
   absWorkingDir: fileURLToPath(root),
   entryPoints: ['src/client/index.ts'],
