@@ -1,0 +1,11 @@
+- insert:
+    - id: codebridge-runtime
+      name: '@deepseek-ai/dsh-ptc-runtime-node'
+      isolate:
+        ptcRuntime: dsh-codebridge-runtime
+      config:
+        executionMode: per-call
+    - id: codebridge
+      name: dsh-codebridge
+      isolate:
+        ptcRuntime: dsh-codebridge-runtime

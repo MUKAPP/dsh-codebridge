@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "代码桥接",
+    "description": "使用临时 JavaScript 或可擦除 TypeScript 代码组合当前代理可见的工具，沿用当前会话权限。"
+  }
+}

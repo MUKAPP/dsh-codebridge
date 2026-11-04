@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">Code bridge</title>
+  <desc id="desc">Code brackets joined by a bridge with two supports.</desc>
+  <rect width="128" height="128" rx="28" fill="#132735"/>
+  <g stroke="#EBF4F6" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M34 44 19 64 34 84M94 44l15 20-15 20"/>
+  </g>
+  <g stroke="#74D6C5" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M43 77V54M85 77V54M39 67h50M43 55c12 14 30 14 42 0"/>
+  </g>
+</svg>

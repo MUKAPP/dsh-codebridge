@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Code bridge",
+    "description": "Compose tools visible to the current Agent with temporary JavaScript or erasable TypeScript code, using the current session’s permissions."
+  }
+}
