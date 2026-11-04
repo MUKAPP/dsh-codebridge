@@ -27,7 +27,8 @@ dsh plugin --profile web add https://github.com/MUKAPP/dsh-codebridge.git
 ## 能做什么
 
 - **用代码串联工具**：支持条件判断、循环、结果筛选和汇总，减少模型往返与中间结果回传。
-- **按需查看工具结构**：查询参数和规范返回值 schema，避免猜测工具返回字段。
+- **按需查看工具结构与环境**：查询参数和规范返回值 schema，也可只读检查专用运行时及当前会话配置。
+- **可恢复的大输出预览**：全文保存成功后缩短展示，保留规范 JSON，并给出取回位置。
 - **沿用当前会话权限**：每个子调用经过 DSH 工具管线，保留可见性检查、审批、取消和调用记录。
 - **与 PTC Plus 共存**：使用专用官方 Node 运行时，避免公共运行时被接管后丢失超时或沙箱能力。
 
@@ -37,8 +38,8 @@ dsh plugin --profile web add https://github.com/MUKAPP/dsh-codebridge.git
 
 | 工具 | 参数 | 用途 |
 | --- | --- | --- |
-| `codebridge_exec` | `code`、`description`、可选 `timeoutMs` | 执行代码并返回日志与结果 |
-| `codebridge_tools` | `names`：非空工具名数组 | 查询当前代理可见工具的输入和规范输出结构 |
+| `codebridge_exec` | `code`、`description`、可选 `timeoutMs`、`maxInlineBytes` | 执行代码并返回日志与结果，大输出可预览并保留全文 |
+| `codebridge_tools` | `names`、可选 `diagnostics` | 查询工具结构或只读检查环境；仅诊断时可省略 `names` |
 
 ### 先查询，再调用
 
@@ -60,11 +61,37 @@ dsh plugin --profile web add https://github.com/MUKAPP/dsh-codebridge.git
 
 `code` 是**异步函数体**，支持顶层 `await` 和 `return`，无需再包一层函数。工具名与返回结构以当前会话查询结果为准；代码收到的是工具的规范 JSON，可能与原生工具展示的文本不同。子工具失败会抛出可捕获的 `ToolCallError`，包含 `name`、`toolName` 和 `message`。
 
-代码工具的规范返回值包含 `logs`，并可包含 `result` 和 `sandbox`。`console.log()` 写入日志，`return` 提供最终结果；返回值必须是无损 JSON。
+代码工具的规范返回值包含 `logs`，并可包含 `result`、`sandbox` 和 `preview`。`console.log()` 写入日志，`return` 提供最终结果；返回值必须是无损 JSON。日志和返回值同时存在时，展示文本会分区标明。
+
+### 大输出与全文访问
+
+`maxInlineBytes` 控制展示正文的 UTF-8 字节预算，默认为 `32768`（32 KiB），允许 `1024`–`262144`，不含预览说明与取回提示。超过预算时，插件使用宿主已挂载的 `spillStore` 保存完整 JSON，再展示首尾预览。规范返回值中的 `logs`、`result` 不截断；新增的 `preview` 提供 `text`、`locator`、完整文件 `bytes` 和 `retrievalHint`。预览文本可能在 JSON 中间省略，不能当作完整 JSON 解析。
+
+完整 JSON 包含日志、返回值及可用的沙箱信息；运行失败时保存运行时已返回的日志、错误及调用定位信息。按照 `locator` 和 `retrievalHint` 使用当前可用的读取工具取回；本地文件也可由后续代码在权限允许时读取并筛选。无需重新执行原操作。文件访问和保留期限仍由宿主策略决定。
+
+未挂载全文存储或保存失败时，插件保留完整展示并在宿主日志说明原因。此预算不改变 `codebridge-runtime` 的 `maxOutputBytes` 硬上限；运行时已拒绝的超限数据不保证可以找回。
+
+### 只读环境诊断
+
+调用 `codebridge_tools`：
+
+```json
+{ "diagnostics": true }
+```
+
+也可同时传入 `names` 查询工具结构。返回的 `diagnostics` 包括当前目录、会话文件权限、专用运行时的语言/执行形式/隔离类型/超时能力，以及全文存储是否已挂载。`configurationReady` 仅表示这些配置检查未发现问题；不会启动进程、检查目录存在性、修改配置或证明沙箱完整隔离。输出硬上限请查看运行时配置。
+
+专用运行时缺失时，应恢复整个 `dsh-codebridge` 组合包及其命名隔离配置；单独启用公共 Node 运行时可能无效。
+
+### 失败定位
+
+外层失败报告会标明运行阶段、调用标识、运行时错误类别和处理建议；存在失败子调用时，还会附最近失败工具及子调用标识。最近失败的子调用可能已经被代码捕获，不一定是最终异常的原因。子调用管线或持久记录失败仍会使整个执行失败。
+
+`ToolCallError` 仍仅保证 `name`、`toolName`、`message`；不新增代码侧 `error.code`，不自动重试。已发生的操作不会回滚，重试前应核查其实际结果。
 
 ## 执行规则
 
-- **子调用串行**：提交多个 Promise 也不代表工具并行。所有异步工具调用都要 `await`，程序结束时未完成的调用会被取消并等待收尾。
+- **子调用串行**：提交多个 Promise 也不代表工具并行。所有异步工具调用都要 `await`，程序结束时未完成的调用会被取消并等待收尾。取消或超时后仍需等待在途工具、日志及已开始的全文保存结束，`timeoutMs` 不代表包含这些收尾工作的总返回时限。
 - **每次独立执行**：不保留跨调用变量；已发生的文件写入或外部请求不会因报错、超时而回滚。
 - **遵守作用域**：只能调用当前代理可见工具，不提供递归调用 CodeBridge 或 `run_code` 的入口。代码工具本身没有提权参数。
 - **沙箱沿用宿主**：Node 文件、网络和子进程操作受实际宿主策略约束。Windows 后端可能报告 `partial`，不能将其视为完整隔离。

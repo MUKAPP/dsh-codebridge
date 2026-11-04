@@ -1,6 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { brandString } from '@deepseek-ai/dsh-brand'
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, HarnessError } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, ToolCallId, ToolSchema } from '@deepseek-ai/dsh-llm'
 import type { PtcBindingFunction } from '@deepseek-ai/dsh-ptc-runtime'
 import { scopeTarget } from '@deepseek-ai/dsh-scope'
@@ -13,6 +13,7 @@ import { EXCLUDED_TOOLS } from './catalog.js'
 export class SerialDispatch {
   private tail: Promise<void> = Promise.resolve()
   private count = 0
+  lastFailure: { toolName: string; callId: string; code?: string } | undefined
   private fatal: { error: unknown } | undefined
   private readonly tools
   readonly functions: Record<string, PtcBindingFunction> = Object.create(null)
@@ -60,6 +61,9 @@ export class SerialDispatch {
       if (!result.isError && result.content.some(block => block.type === 'image')) {
         this.exec.deferContext(createUserMessage({ content: result.content, source: { kind: 'ptc-mode' } }))
       }
+      if (result.isError) {
+        this.lastFailure = { toolName: schema.name, callId: String(subCallId), ...(result.error.info === undefined ? {} : { code: result.error.info.code }) }
+      }
       for (const context of result.additionalContexts ?? []) this.exec.deferContext(context)
       if (result.concludesTurn) this.exec.concludeTurn()
       const content = await this.logContent(subCallId, schema.name, result)
@@ -73,9 +77,13 @@ export class SerialDispatch {
     } catch (error) {
       // 工具业务失败通过 result 返回；拒绝表示管线或会话记录本身失败。
       // 即使程序 catch 了绑定错误，外层也不能宣称成功。
-      this.fatal ??= { error }
-      this.controller.abort(error)
-      throw error
+      const failure = new HarnessError(
+        `子调用管线或记录失败；工具：${schema.name}；调用：${String(subCallId)}；${error instanceof Error ? error.message : String(error)}`,
+        'CODEBRIDGE_DISPATCH_FAILED',
+      )
+      this.fatal ??= { error: failure }
+      this.controller.abort(failure)
+      throw failure
     }
     this.controller.signal.throwIfAborted()
     if (result.isError) throw new Error(result.error.message)

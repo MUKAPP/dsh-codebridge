@@ -38,6 +38,9 @@ importers:
       '@deepseek-ai/dsh-session':
         specifier: 0.2.1-rc.5
         version: 0.2.1-rc.5(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-scope@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5))
+      '@deepseek-ai/dsh-spill':
+        specifier: 0.2.1-rc.5
+        version: 0.2.1-rc.5(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-brand@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5))(@deepseek-ai/dsh-llm@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5))(@deepseek-ai/dsh-session@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-scope@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5)))
       '@deepseek-ai/dsh-tools':
         specifier: 0.2.1-rc.5
         version: 0.2.1-rc.5(838c99649576d6611fa9994cb21a266c)
@@ -165,6 +168,14 @@ packages:
     peerDependencies:
       '@deepseek-ai/cordis': ~4.0.5
       '@deepseek-ai/dsh-scope': 0.2.1-rc.5
+
+  '@deepseek-ai/dsh-spill@0.2.1-rc.5':
+    resolution: {integrity: sha512-tw5UAZ7ZdG7FbqEtZTeN7c6CMLYAaxKoR5S9Lq+FMksoldKmpInTNztjlrvBAA2Sh1LbZm02Hl/QNQrAa/SjAg==}
+    peerDependencies:
+      '@deepseek-ai/cordis': ~4.0.5
+      '@deepseek-ai/dsh-brand': 0.2.1-rc.5
+      '@deepseek-ai/dsh-llm': 0.2.1-rc.5
+      '@deepseek-ai/dsh-session': 0.2.1-rc.5
 
   '@deepseek-ai/dsh-subprocess@0.2.1-rc.5':
     resolution: {integrity: sha512-qwexyhc7qoxuFrjujnSXKoI7dLKuS8T1UgsAwNd41priFGiAxKZ3vUkLaE7VALW0SS9YeQV85RtqPSpAP3WarQ==}
@@ -363,6 +374,13 @@ snapshots:
       '@deepseek-ai/dsh-llm': 0.2.1-rc.5(@deepseek-ai/cordis@4.0.5)
       '@deepseek-ai/dsh-scope': 0.2.1-rc.5(@deepseek-ai/cordis@4.0.5)
       '@deepseek-ai/dsh-util-values': 0.2.1-rc.5(@deepseek-ai/cordis@4.0.5)
+
+  '@deepseek-ai/dsh-spill@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-brand@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5))(@deepseek-ai/dsh-llm@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5))(@deepseek-ai/dsh-session@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-scope@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5)))':
+    dependencies:
+      '@deepseek-ai/cordis': 4.0.5
+      '@deepseek-ai/dsh-brand': 0.2.1-rc.5(@deepseek-ai/cordis@4.0.5)
+      '@deepseek-ai/dsh-llm': 0.2.1-rc.5(@deepseek-ai/cordis@4.0.5)
+      '@deepseek-ai/dsh-session': 0.2.1-rc.5(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-scope@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5))
 
   '@deepseek-ai/dsh-subprocess@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-http-proxy@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5))':
     dependencies:
