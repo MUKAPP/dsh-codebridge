@@ -8,7 +8,6 @@ import { CallLifecycle } from './lifecycle.js'
 import type { Config } from './config.js'
 import type { SessionSnapshotStore, SnapshotStatus } from './state.js'
 import { SerialDispatch } from './dispatch.js'
-import { ExecutionProgress } from './progress.js'
 import { RUNTIME_MISSING_MESSAGE, REPL_REQUIRED_MESSAGE } from './diagnostics.js'
 import { runtimeFailureText, stageFailure } from './errors.js'
 import { DEFAULT_INLINE_BYTES, MAX_INLINE_BYTES, preparePreview, previewSchema, renderExecutionOutput, renderPreview } from './output.js'
@@ -64,14 +63,11 @@ export function createExecuteTool(ctx: Context, lifecycle: CallLifecycle, snapsh
       if (!Number.isSafeInteger(maxInlineBytes) || maxInlineBytes < 1024 || maxInlineBytes > MAX_INLINE_BYTES) {
         throw new Error(`maxInlineBytes 必须是 1024–${MAX_INLINE_BYTES} 范围内的整数。`)
       }
-      const progress = new ExecutionProgress(ctx, exec, args.description)
-      return progress.track(() => lifecycle.run(exec, async (signal, policy, stateOwner, runtime) => {
+      return lifecycle.run(exec, async (signal, policy, stateOwner, runtime) => {
         if (runtime === undefined) throw new HarnessError(RUNTIME_MISSING_MESSAGE, 'CODEBRIDGE_RUNTIME_UNAVAILABLE')
         if (runtime.language !== 'typescript') throw new Error('CodeBridge 只支持 Node TypeScript 运行时。')
         if (runtime.programFormat !== 'repl') throw new HarnessError(REPL_REQUIRED_MESSAGE, 'CODEBRIDGE_REPL_UNAVAILABLE')
         if (args.timeoutMs !== undefined && runtime.timeout === undefined) throw new Error('当前运行时不支持 timeoutMs。')
-        progress.observe(signal)
-        progress.stage('解析工作目录')
         if (runtime.sandboxMode === undefined && policy.mode !== 'danger-full-access') {
           throw new Error(`当前运行时无法实施会话的 ${policy.mode} 文件权限。`)
         }
@@ -105,7 +101,7 @@ export function createExecuteTool(ctx: Context, lifecycle: CallLifecycle, snapsh
           return status.warning
         }
         try {
-          dispatch = new SerialDispatch(ctx, exec, controller, progress)
+          dispatch = new SerialDispatch(ctx, exec, controller)
           let stage = '解析运行参数'
           try {
             const spec = runtime.resolve({
@@ -121,16 +117,13 @@ export function createExecuteTool(ctx: Context, lifecycle: CallLifecycle, snapsh
               ...(args.timeoutMs === undefined ? {} : { timeoutMs: args.timeoutMs }),
             })
             stage = '启动或执行运行时'
-            progress.stage('运行代码')
             userExecutionStarted = true
             result = await runtime.run(spec)
           } catch (error) {
             if (signal.aborted) throw new HarnessError('代码执行已取消。', TOOL_ABORTED)
             throw stageFailure(stage, callId, error)
           } finally {
-            progress.drain()
             await dispatch.close()
-            progress.drained()
           }
         } catch (error) {
           // The user program may already have changed state; invalidate only after dispatch/log drainage.
@@ -144,7 +137,6 @@ export function createExecuteTool(ctx: Context, lifecycle: CallLifecycle, snapsh
           const warning = await clearRecovery()
           throw new HarnessError(`代码执行已取消。${warning === undefined ? '' : `\n${warning}`}`, TOOL_ABORTED)
         }
-        progress.stage('整理输出，等待已开始的全文保存结束')
         if (result.error !== undefined) {
           const snapshotWarning = await clearRecovery()
           const recent = dispatch.lastFailure === undefined ? ''
@@ -173,7 +165,7 @@ export function createExecuteTool(ctx: Context, lifecycle: CallLifecycle, snapsh
         const value = { ...(snapshot === undefined ? {} : { snapshot: { ...snapshot } }), logs: result.logs, ...(result.value === undefined ? {} : { result: result.value }), ...(result.sandbox === undefined ? {} : { sandbox: { ...result.sandbox } }) }
         const preview = await preparePreview(ctx, exec, signal, renderExecutionOutput(value), value, maxInlineBytes)
         return { ...value, ...(preview === undefined ? {} : { preview }) }
-      }))
+      })
     },
     presentCall: args => ({ card: 'generic', title: args.description, kind: 'execute', rawInput: args.code }),
   })

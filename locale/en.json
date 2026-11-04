@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Code bridge",
-    "description": "Use a session-bound persistent TypeScript REPL under current session permissions to compose visible tools, with configurable state retention, restart JSON data recovery, summary search, execution and cancellation-drain feedback, recoverable output previews, and read-only environment diagnostics."
+    "description": "Use a session-bound persistent TypeScript REPL under current session permissions to compose visible tools, with configurable state retention, restart JSON data recovery, summary search, recoverable output previews, and read-only environment diagnostics."
   }
 }
