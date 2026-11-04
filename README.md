@@ -60,7 +60,7 @@ dsh plugin --profile web add https://github.com/MUKAPP/dsh-codebridge.git
 { "names": ["working_directory"] }
 ```
 
-`names` 查询保留原有行为：`tools` 默认包含名称、说明、完整 `parameters` 和 `output`；`unavailable` 列出不可用名称。可用 `detail: "summary"` 或 `detail: "full"` 显式选择返回内容。`names` 与 `query` 互斥，分页参数只用于搜索；`diagnostics: true` 可单独请求或与任一查询组合。查询始终排除不可见工具、CodeBridge 自身和 `run_code`。确认参数后，即可调用 `codebridge_exec`：
+`names` 查询保留原有行为：`tools` 默认包含名称、说明、完整 `parameters` 和 `output`；`unavailable` 列出不可用名称。可用 `detail: "summary"` 或 `detail: "full"` 显式选择返回内容。非空 `names` 与非空 `query` 不能同时使用；名称查询允许附带空 `query`，并忽略 `offset`、`limit`，始终查询全部指定名称。分页参数仅在 `query` 搜索时生效，仅诊断时也会忽略；`diagnostics: true` 可单独请求或与任一查询组合。查询始终排除不可见工具、CodeBridge 自身和 `run_code`。确认参数后，即可调用 `codebridge_exec`：
 
 ```json
 {
