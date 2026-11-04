@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Code bridge",
-    "description": "Compose visible tools with temporary JavaScript or erasable TypeScript under current session permissions, with recoverable output previews and read-only environment diagnostics."
+    "description": "Compose visible tools with temporary JavaScript or erasable TypeScript under current session permissions, with summary search, execution and cancellation-drain feedback, recoverable output previews, and read-only environment diagnostics."
   }
 }

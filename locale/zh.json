@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "代码桥接",
-    "description": "使用临时 JavaScript 或可擦除 TypeScript 编排当前代理可见的工具，沿用会话权限，支持可恢复的输出预览与只读环境诊断。"
+    "description": "使用临时 JavaScript 或可擦除 TypeScript 编排当前代理可见的工具，沿用会话权限，支持摘要搜索、执行与取消收尾反馈、可恢复的输出预览和只读环境诊断。"
   }
 }

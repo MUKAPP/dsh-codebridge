@@ -6,6 +6,7 @@ import type {} from '@deepseek-ai/dsh-working-directory'
 import { EXEC_NAME } from './catalog.js'
 import { CallLifecycle } from './lifecycle.js'
 import { SerialDispatch } from './dispatch.js'
+import { ExecutionProgress } from './progress.js'
 import { RUNTIME_MISSING_MESSAGE } from './diagnostics.js'
 import { runtimeFailureText, stageFailure } from './errors.js'
 import { DEFAULT_INLINE_BYTES, MAX_INLINE_BYTES, preparePreview, previewSchema, renderExecutionOutput, renderPreview } from './output.js'
@@ -56,7 +57,10 @@ export function createExecuteTool(ctx: Context, lifecycle: CallLifecycle) {
       if (runtime === undefined) throw new HarnessError(RUNTIME_MISSING_MESSAGE, 'CODEBRIDGE_RUNTIME_UNAVAILABLE')
       if (runtime.language !== 'typescript') throw new Error('CodeBridge 只支持 Node TypeScript 运行时。')
       if (args.timeoutMs !== undefined && runtime.timeout === undefined) throw new Error('当前运行时不支持 timeoutMs。')
-      return lifecycle.run(exec, async (signal, policy) => {
+      const progress = new ExecutionProgress(ctx, exec, args.description)
+      return progress.track(() => lifecycle.run(exec, async (signal, policy) => {
+        progress.observe(signal)
+        progress.stage('解析工作目录')
         if (runtime.sandboxMode === undefined && policy.mode !== 'danger-full-access') {
           throw new Error(`当前运行时无法实施会话的 ${policy.mode} 文件权限。`)
         }
@@ -75,7 +79,7 @@ export function createExecuteTool(ctx: Context, lifecycle: CallLifecycle) {
         let result: PtcRunResult
         let dispatch: SerialDispatch
         try {
-          dispatch = new SerialDispatch(ctx, exec, controller)
+          dispatch = new SerialDispatch(ctx, exec, controller, progress)
           let stage = '解析运行参数'
           try {
             const spec = runtime.resolve({
@@ -90,17 +94,21 @@ export function createExecuteTool(ctx: Context, lifecycle: CallLifecycle) {
               ...(args.timeoutMs === undefined ? {} : { timeoutMs: args.timeoutMs }),
             })
             stage = '启动或执行运行时'
+            progress.stage('运行代码')
             result = await runtime.run(spec)
           } catch (error) {
             if (signal.aborted) throw new HarnessError('代码执行已取消。', TOOL_ABORTED)
             throw stageFailure(stage, callId, error)
           } finally {
+            progress.drain()
             await dispatch.close()
+            progress.drained()
           }
         } finally {
           signal.removeEventListener('abort', onAbort)
         }
         if (signal.aborted) throw new HarnessError('代码执行已取消。', TOOL_ABORTED)
+        progress.stage('整理输出，等待已开始的全文保存结束')
         if (result.error !== undefined) {
           const recent = dispatch.lastFailure === undefined ? ''
             : `\n最近失败的子调用（可能已被代码捕获）：${dispatch.lastFailure.toolName}；调用：${dispatch.lastFailure.callId}${dispatch.lastFailure.code === undefined ? '' : `；错误码：${dispatch.lastFailure.code}`}`
@@ -119,7 +127,7 @@ export function createExecuteTool(ctx: Context, lifecycle: CallLifecycle) {
         const value = { logs: result.logs, ...(result.value === undefined ? {} : { result: result.value }), ...(result.sandbox === undefined ? {} : { sandbox: { ...result.sandbox } }) }
         const preview = await preparePreview(ctx, exec, signal, renderExecutionOutput(value), value, maxInlineBytes)
         return { ...value, ...(preview === undefined ? {} : { preview }) }
-      })
+      }))
     },
     presentCall: args => ({ card: 'generic', title: args.description, kind: 'execute', rawInput: args.code }),
   })

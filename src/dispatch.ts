@@ -8,6 +8,7 @@ import type { ToolExecutionResult, ToolRunContext } from '@deepseek-ai/dsh-tools
 import { deepFreeze, snapshotJsonValue } from '@deepseek-ai/dsh-util-values'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { EXCLUDED_TOOLS } from './catalog.js'
+import type { ExecutionProgress } from './progress.js'
 
 /** 一次程序的串行子调用队列，包含最终结果处理和日志持久化。 */
 export class SerialDispatch {
@@ -18,7 +19,7 @@ export class SerialDispatch {
   private readonly tools
   readonly functions: Record<string, PtcBindingFunction> = Object.create(null)
 
-  constructor(private readonly ctx: Context, private readonly exec: ToolRunContext, private readonly controller: AbortController) {
+  constructor(private readonly ctx: Context, private readonly exec: ToolRunContext, private readonly controller: AbortController, private readonly progress: ExecutionProgress) {
     this.tools = ctx.tools
     for (const schema of this.tools.schemas(exec.agent)) {
       if (EXCLUDED_TOOLS.has(schema.name)) continue
@@ -35,6 +36,7 @@ export class SerialDispatch {
     const argumentsCopy = snapshotJsonValue(args)
     if (argumentsCopy === undefined) return Promise.reject(new Error('工具参数必须是无损 JSON。'))
     const subCallId = brandString<ToolCallId>(`${String(this.exec.callId)}:ptc:${++this.count}`)
+    this.progress.submitted()
     const pending = this.tail.then(() => this.dispatch(schema, argumentsCopy, subCallId))
     // 队列自身始终可结算，失败仍由原始 Promise 交还调用程序。
     this.tail = pending.then(() => {}, () => {})
@@ -48,6 +50,7 @@ export class SerialDispatch {
     let result: ToolExecutionResult
     try {
       this.exec.agent?.session.append('tool/ptc-dispatch-start', ids)
+      this.progress.start(schema.name)
       result = await this.tools.execute({
         callId: subCallId,
         rootCallId: this.exec.rootCallId,
@@ -66,6 +69,7 @@ export class SerialDispatch {
       }
       for (const context of result.additionalContexts ?? []) this.exec.deferContext(context)
       if (result.concludesTurn) this.exec.concludeTurn()
+      this.progress.logging()
       const content = await this.logContent(subCallId, schema.name, result)
       this.exec.agent?.session.append('tool/ptc-dispatch', {
         ...ids,
@@ -74,6 +78,7 @@ export class SerialDispatch {
         ...(result.meta === undefined ? {} : { meta: result.meta }),
         ...(result.error?.info === undefined ? {} : { error: result.error.info }),
       })
+      this.progress.complete(result.isError)
     } catch (error) {
       // 工具业务失败通过 result 返回；拒绝表示管线或会话记录本身失败。
       // 即使程序 catch 了绑定错误，外层也不能宣称成功。

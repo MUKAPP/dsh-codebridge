@@ -14,7 +14,7 @@
 https://github.com/MUKAPP/dsh-codebridge.git
 ```
 
-安装时会从源码编译插件。如果管理器提示构建脚本待批准，核对本仓库的编译脚本后选择允许并重试；`prepare` 和 `prepack` 都只执行 `tsc -p tsconfig.json`。安装完成后按管理器提示启用或重启 DSH。仅刷新浏览器页面不会重新加载 Host 插件。
+安装时会从源码编译插件。如果管理器提示构建脚本待批准，核对本仓库的编译脚本后选择允许并重试；`prepare` 和 `prepack` 会编译 Host 与 Web 客户端。安装完成后按管理器提示启用或重启 DSH。仅刷新浏览器页面不会重新加载 Host 插件。
 
 命令行用户也可安装到指定 profile，以下以 `web` 为例：
 
@@ -27,7 +27,8 @@ dsh plugin --profile web add https://github.com/MUKAPP/dsh-codebridge.git
 ## 能做什么
 
 - **用代码串联工具**：支持条件判断、循环、结果筛选和汇总，减少模型往返与中间结果回传。
-- **按需查看工具结构与环境**：查询参数和规范返回值 schema，也可只读检查专用运行时及当前会话配置。
+- **先搜索摘要，再查结构**：按名称或描述筛选当前可用工具，再按需获取参数和规范返回值 schema；也可只读检查环境。
+- **执行与取消反馈**：显示当前工具、已提交和已完成情况，区分等待工具、日志收尾与执行结束。
 - **可恢复的大输出预览**：全文保存成功后缩短展示，保留规范 JSON，并给出取回位置。
 - **沿用当前会话权限**：每个子调用经过 DSH 工具管线，保留可见性检查、审批、取消和调用记录。
 - **与 PTC Plus 共存**：使用专用官方 Node 运行时，避免公共运行时被接管后丢失超时或沙箱能力。
@@ -39,17 +40,25 @@ dsh plugin --profile web add https://github.com/MUKAPP/dsh-codebridge.git
 | 工具 | 参数 | 用途 |
 | --- | --- | --- |
 | `codebridge_exec` | `code`、`description`、可选 `timeoutMs`、`maxInlineBytes` | 执行代码并返回日志与结果，大输出可预览并保留全文 |
-| `codebridge_tools` | `names`、可选 `diagnostics` | 查询工具结构或只读检查环境；仅诊断时可省略 `names` |
+| `codebridge_tools` | `names` 或 `query`，可选 `detail`、`offset`、`limit`、`diagnostics` | 搜索摘要、按需查询完整结构或只读检查环境 |
 
 ### 先查询，再调用
 
-让模型调用 `codebridge_tools` 查询目标工具，例如：
+不知道工具名时，先让模型调用 `codebridge_tools` 搜索名称或描述：
+
+```json
+{ "query": "文件", "limit": 20 }
+```
+
+搜索不区分大小写，按去除首尾空白后的子串匹配；`query: ""` 浏览全部可见工具。默认仅返回名称和说明，不附带参数与返回结构。结果按名称排序，`total` 是匹配总数；有后续页时返回 `nextOffset`，以相同查询和该 `offset` 继续。`limit` 默认为 20，范围 1–100，`offset` 默认为 0。每次查询使用当时的可见工具集合，不是固定快照。
+
+找到目标后，用精确名称查询完整结构，例如：
 
 ```json
 { "names": ["working_directory"] }
 ```
 
-查询结果中，`tools` 包含名称、说明、`parameters` 和 `output`；`unavailable` 列出不可用名称。确认参数后，即可调用 `codebridge_exec`：
+`names` 查询保留原有行为：`tools` 默认包含名称、说明、完整 `parameters` 和 `output`；`unavailable` 列出不可用名称。可用 `detail: "summary"` 或 `detail: "full"` 显式选择返回内容。`names` 与 `query` 互斥，分页参数只用于搜索；`diagnostics: true` 可单独请求或与任一查询组合。查询始终排除不可见工具、CodeBridge 自身和 `run_code`。确认参数后，即可调用 `codebridge_exec`：
 
 ```json
 {
@@ -82,6 +91,14 @@ dsh plugin --profile web add https://github.com/MUKAPP/dsh-codebridge.git
 也可同时传入 `names` 查询工具结构。返回的 `diagnostics` 包括当前目录、会话文件权限、专用运行时的语言/执行形式/隔离类型/超时能力，以及全文存储是否已挂载。`configurationReady` 仅表示这些配置检查未发现问题；不会启动进程、检查目录存在性、修改配置或证明沙箱完整隔离。输出硬上限请查看运行时配置。
 
 专用运行时缺失时，应恢复整个 `dsh-codebridge` 组合包及其命名隔离配置；单独启用公共 Node 运行时可能无效。
+
+### 长任务与取消收尾
+
+Web 会话中的执行状态显示当前阶段、当前子工具以及已提交、已完成和失败数量。已完成数量包括返回失败的子调用，只有工具结果和日志均已处理后才计入；已提交不代表程序预计的总步骤，排队后被取消的调用不算已完成。原有子调用树仍保留每次调用的详细结果。
+
+取消请求到达后，状态会标明取消中，并继续显示正在等待的工具或日志阶段；只有运行时、在途子调用、日志以及已开始的全文保存均结束后，才显示收尾已结束。超时和程序提前返回也会等待收尾。运行时 `console.log` 仍在最终结果中返回，不是实时日志流；此状态不会改变串行执行或取消语义。
+
+进度记录用于界面呈现，不进入模型上下文；刷新后可从会话事件恢复。需要重新加载更新后的插件及其客户端扩展才能看到新状态。
 
 ### 失败定位
 
