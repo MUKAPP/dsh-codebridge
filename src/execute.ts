@@ -16,7 +16,7 @@ export function createExecuteTool(ctx: Context, lifecycle: CallLifecycle) {
   const directories = ctx.workingDirectory
   return defineTool({
     name: EXEC_NAME,
-    description: '在临时 Node 环境执行 JavaScript/可擦除 TypeScript 异步函数体，支持顶层 await 和 return。console.log 捕获到 logs；所有 tools.<工具名>(参数) 调用须 await，按串行执行，不保留跨调用变量。仅绑定当前代理可见工具，返回规范 JSON；失败抛出 ToolCallError（name、toolName、message）。用 codebridge_tools 查询结构或 diagnostics:true 检查环境。大输出在全文保存成功后显示预览及取回位置，规范返回值保持完整；只返回任务需要的数据。Node 文件、网络和子进程操作沿用当前会话目录及宿主沙箱策略。',
+    description: '工具选择：单步读取、写入或查询可直接调用原生工具；当任务需要两个或更多工具、循环、条件判断、批量筛选、分页处理或汇总时，优先使用本工具在一次代码执行中编排完成。它在临时 Node 环境执行 JavaScript/可擦除 TypeScript 异步函数体，支持顶层 await 和 return。console.log 捕获到 logs；所有 tools.<工具名>(参数) 调用须 await，按串行执行，不保留跨调用变量。仅绑定当前代理可见工具，返回规范 JSON；失败抛出 ToolCallError（name、toolName、message）。先用 codebridge_tools 查询结构，或用 diagnostics:true 检查环境。大输出在全文保存成功后显示预览及取回位置，规范返回值保持完整；只返回任务需要的数据。Node 文件、网络和子进程操作沿用当前会话目录及宿主沙箱策略。',
     parameters: {
       code: { type: 'string', required: true, description: '异步函数体源码。return 返回无损 JSON；无返回值时仅输出日志。' },
       description: { type: 'string', required: true, description: '简短说明本次执行的任务。' },
