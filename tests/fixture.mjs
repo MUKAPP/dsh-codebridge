@@ -11,13 +11,16 @@ class FakeRuntime extends PtcRuntime {
   language = 'typescript'
   isolation = 'fake'
   requests = []
+  released = []
+  releaseBehavior = async () => {}
   behavior = async () => ({ logs: [] })
   constructor(ctx, options = {}) { super(ctx); this.options = options; this.language = options.language ?? 'typescript' }
   get sandboxMode() { return this.options.sandbox === false ? undefined : 'danger-full-access' }
   get timeout() { return this.options.timeout === false ? undefined : { defaultMs: 120_000, maxMs: 240_000 } }
-  get programFormat() { return this.options.programFormat ?? 'function-body' }
+  get programFormat() { return this.options.programFormat ?? 'repl' }
   resolve(request) { this.lastRequest = request; return { ...request, cwd: request.cwd ?? process.cwd(), timeoutMs: request.timeoutMs ?? 120_000 } }
   run(spec) { this.requests.push(spec); return this.behavior(spec) }
+  release(owner) { this.released.push(owner); return this.releaseBehavior(owner) }
 }
 
 export async function setup(t, options = {}) {
@@ -36,11 +39,22 @@ export async function setup(t, options = {}) {
   })
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime, { mode: 'native' })
-  if (options.runtime !== false) await ctx.plugin(FakeRuntime, options.runtime ?? {})
+  let runtimePlugin
+  if (options.runtime !== false) {
+    runtimePlugin = ctx.plugin(FakeRuntime, options.runtime ?? {})
+    await runtimePlugin
+  }
   const plugin = ctx.plugin(CodeBridge)
   await plugin
   const fixture = {
     ctx, gate, policies, ensured, plugin, runtime: ctx.get('ptcRuntime'),
+    async removeRuntime() { await runtimePlugin?.dispose(); fixture.runtime = undefined },
+    async installRuntime(options = {}) {
+      runtimePlugin = ctx.plugin(FakeRuntime, options)
+      await runtimePlugin
+      fixture.runtime = ctx.get('ptcRuntime')
+      return fixture.runtime
+    },
     async mintAgent(id = 'agent-a') {
       const events = []
       const agent = { id, ctx, session: { id, header: { cwd: `${process.cwd()}/${id}` }, append: (type, data) => events.push({ type, data }) } }

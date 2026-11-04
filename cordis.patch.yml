@@ -4,7 +4,7 @@
       isolate:
         ptcRuntime: dsh-codebridge-runtime
       config:
-        executionMode: per-call
+        executionMode: persistent-in-memory
     - id: codebridge
       name: dsh-codebridge
       isolate:

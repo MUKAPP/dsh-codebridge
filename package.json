@@ -8,7 +8,7 @@
     "url": "git+https://github.com/MUKAPP/dsh-codebridge.git"
   },
   "icon": "./icon.svg",
-  "description": "在 DSH 标准模式中用 JavaScript/TypeScript 编排工具，支持摘要搜索、执行进度与取消反馈、可恢复的输出预览和只读环境诊断。",
+  "description": "在 DSH 标准模式中用 JavaScript/TypeScript 编排工具，支持会话级持久 REPL、摘要搜索、执行进度与取消反馈、可恢复的输出预览和只读环境诊断。",
   "type": "module",
   "main": "./lib/index.js",
   "types": "./lib/index.d.ts",

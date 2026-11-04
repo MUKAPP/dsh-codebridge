@@ -104,6 +104,202 @@ test('subcalls and durable logs are serial; root/parent/call IDs and argument sn
   assert.deepEqual(events[2].data.arguments, { value: 'second' })
 })
 
+test('session state owners are reused per session and executions are serialized', { timeout: 5000 }, async t => {
+  const f = await setup(t)
+  const started = f.gate()
+  const release = f.gate()
+  const owners = []
+  let calls = 0
+  f.runtime.behavior = async request => {
+    owners.push(request.stateOwner)
+    calls++
+    if (calls === 1) {
+      started.resolve()
+      await release.promise
+    }
+    return { logs: [], value: calls }
+  }
+  const first = execute(f, { code: 'return 1' })
+  await started.promise
+  const second = execute(f, { code: 'return 2' })
+  await checkpoint()
+  assert.equal(calls, 1)
+  release.resolve()
+  assert.equal(ok(await first).result, 1)
+  assert.equal(ok(await second).result, 2)
+  assert.equal(owners.length, 2)
+  assert.equal(owners[0], owners[1])
+})
+
+test('session state owners are isolated and released with their sessions', { timeout: 5000 }, async t => {
+  const f = await setup(t)
+  const other = await f.mintAgent('agent-b')
+  const owners = []
+  f.runtime.behavior = async request => {
+    owners.push(request.stateOwner)
+    return { logs: [], value: 'ok' }
+  }
+  assert.equal(ok(await execute(f)).result, 'ok')
+  assert.equal(ok(await execute(f, {}, { agent: other.agent })).result, 'ok')
+  assert.equal(owners.length, 2)
+  assert.notEqual(owners[0], owners[1])
+  f.ctx.emit('session/disposed', f.agent.session)
+  await checkpoint()
+  assert.equal(f.runtime.released.includes(owners[0]), true)
+  assert.equal(f.runtime.released.includes(owners[1]), false)
+})
+
+test('disposed session identities cannot recreate owners; a restored session with the same id is independent', { timeout: 5000 }, async t => {
+  const f = await setup(t)
+  const untouched = await f.mintAgent('untouched')
+  f.ctx.emit('session/disposed', untouched.agent.session)
+  failed(await execute(f, {}, { agent: untouched.agent }), /会话状态已释放/)
+  assert.equal(f.runtime.requests.length, 0)
+  ok(await execute(f))
+  const owner = f.runtime.requests[0].stateOwner
+  f.ctx.emit('session/disposed', f.agent.session)
+  await checkpoint()
+  assert.deepEqual(f.runtime.released, [owner])
+  failed(await execute(f), /会话状态已释放/)
+  const restored = await f.mintAgent(f.agent.session.id)
+  ok(await execute(f, {}, { agent: restored.agent }))
+  assert.notEqual(f.runtime.requests[1].stateOwner, owner)
+  f.ctx.emit('session/disposed', f.agent.session)
+  await checkpoint()
+  assert.deepEqual(f.runtime.released, [owner], 'a repeated old disposal cannot release the restored owner')
+})
+
+test('queued cancellation settles promptly without allowing its successor to bypass body and log drainage', { timeout: 5000 }, async t => {
+  const f = await setup(t)
+  const other = await f.mintAgent('agent-b')
+  const started = f.gate(), releaseBody = f.gate(), logEntered = f.gate(), releaseLog = f.gate()
+  register(f, 'slow', { execute: async () => { started.resolve(); await releaseBody.promise; return 'first' } })
+  f.ctx.on('tools/ptc-dispatch-log', async (_dispatch, next) => { logEntered.resolve(); await releaseLog.promise; return next() })
+  f.runtime.behavior = async request => ({ logs: [], value: f.runtime.requests.length === 1 ? await functions(request).slow({ value: 'first' }) : 'next' })
+  const first = execute(f)
+  await started.promise
+  const controller = new AbortController()
+  let cancelled = false
+  const queued = execute(f, {}, { signal: controller.signal }).then(result => { cancelled = true; return result })
+  await checkpoint()
+  controller.abort(new Error('cancel queued execution'))
+  await checkpoint()
+  assert.equal(cancelled, true, 'queued exec must not wait for the non-cooperative predecessor')
+  failed(await queued)
+  const successor = execute(f)
+  assert.equal(ok(await execute(f, {}, { agent: other.agent })).result, 'next')
+  await checkpoint()
+  assert.equal(f.runtime.requests.length, 2, 'another session may run, but the successor must stay queued')
+  releaseBody.resolve()
+  await logEntered.promise
+  await checkpoint()
+  assert.equal(f.runtime.requests.length, 2, 'cancelled queue nodes cannot bypass durable logging')
+  releaseLog.resolve()
+  assert.equal(ok(await first).result, 'first')
+  assert.equal(ok(await successor).result, 'next')
+  assert.equal(f.runtime.requests.length, 3)
+  assert.equal(f.runtime.requests[0].stateOwner, f.runtime.requests[2].stateOwner)
+})
+
+for (const replacement of [false, true]) {
+  test(`queued execution uses the admitted provider generation when runtime is ${replacement ? 'replaced' : 'missing'}`, { timeout: 5000 }, async t => {
+    const f = await setup(t)
+    const old = f.runtime
+    const started = f.gate(), release = f.gate()
+    old.behavior = async () => { started.resolve(); await release.promise; return { logs: [], value: 'old' } }
+    const first = execute(f)
+    await started.promise
+    const queued = execute(f)
+    await checkpoint()
+    await f.removeRuntime()
+    const current = replacement ? await f.installRuntime() : undefined
+    if (current) current.behavior = async () => ({ logs: [], value: 'current' })
+    release.resolve()
+    assert.equal(ok(await first).result, 'old')
+    if (current) {
+      assert.equal(ok(await queued).result, 'current')
+      assert.equal(current.requests[0].stateOwner, old.requests[0].stateOwner)
+    } else failed(await queued, /PTC.*运行时/)
+    assert.equal(old.requests.length, 1)
+    f.ctx.emit('session/disposed', f.agent.session)
+    await checkpoint()
+    assert.deepEqual(old.released, [old.requests[0].stateOwner], 'missing/replaced provider must not silently lose the original owner')
+    if (current) assert.deepEqual(current.released, [old.requests[0].stateOwner])
+  })
+}
+
+test('session disposal and unload share one release after active subcalls and durable logs finish', { timeout: 5000 }, async t => {
+  const f = await setup(t)
+  const started = f.gate(), aborted = f.gate(), releaseBody = f.gate(), logEntered = f.gate(), releaseLog = f.gate(), releasing = f.gate(), releaseOwner = f.gate()
+  register(f, 'slow', { execute: async (_args, exec) => { exec.signal.addEventListener('abort', () => aborted.resolve(), { once: true }); started.resolve(); await releaseBody.promise; return 'finished' } })
+  f.ctx.on('tools/ptc-dispatch-log', async (_dispatch, next) => { logEntered.resolve(); await releaseLog.promise; return next() })
+  f.runtime.behavior = async request => {
+    request.signal.addEventListener('abort', () => f.ctx.emit('session/disposed', f.agent.session), { once: true })
+    await functions(request).slow({ value: 'x' }).catch(() => undefined)
+    return { logs: [] }
+  }
+  f.runtime.releaseBehavior = async () => {
+    assert.equal(f.events.filter(event => event.type === 'tool/ptc-dispatch').length, 1)
+    releasing.resolve()
+    await releaseOwner.promise
+  }
+  const pending = execute(f)
+  await started.promise
+  f.ctx.emit('session/disposed', f.agent.session)
+  f.ctx.emit('session/disposed', f.agent.session)
+  let disposed = false
+  const disposal = f.plugin.dispose().then(() => { disposed = true })
+  await aborted.promise
+  await checkpoint()
+  assert.deepEqual(f.runtime.released, [])
+  assert.equal(disposed, false)
+  releaseBody.resolve()
+  await logEntered.promise
+  await checkpoint()
+  assert.deepEqual(f.runtime.released, [], 'owner cannot release while a child durable log is pending')
+  releaseLog.resolve()
+  await releasing.promise
+  failed(await pending)
+  assert.equal(disposed, false, 'unload must await the release already started by session disposal')
+  assert.equal(f.runtime.released.length, 1)
+  releaseOwner.resolve()
+  await disposal
+  assert.equal(f.runtime.released.length, 1)
+})
+
+test('release failures remain observable for every provider and unload still awaits other owners', { timeout: 5000 }, async t => {
+  const f = await setup(t)
+  const warnings = []
+  f.ctx.logger.exporter({ levels: { default: 3 }, export: message => { if (message.type === 'warn') warnings.push(message.args.join(' ')) } })
+  ok(await execute(f))
+  const old = f.runtime, owner = old.requests[0].stateOwner
+  old.releaseBehavior = async () => { throw new Error('old generation cleanup failed') }
+  await f.removeRuntime()
+  const current = await f.installRuntime()
+  ok(await execute(f))
+  const other = await f.mintAgent('agent-b')
+  ok(await execute(f, {}, { agent: other.agent }))
+  const releasingOther = f.gate(), releaseOther = f.gate()
+  current.releaseBehavior = async released => {
+    if (released !== owner) { releasingOther.resolve(); await releaseOther.promise; throw new Error('other owner cleanup failed') }
+    throw new Error('current generation cleanup failed')
+  }
+  f.ctx.emit('session/disposed', f.agent.session)
+  await checkpoint()
+  assert.equal(warnings.some(message => message.includes('old generation cleanup failed')), true)
+  assert.equal(warnings.some(message => message.includes('current generation cleanup failed')), true)
+  let disposed = false
+  const disposal = f.plugin.dispose().then(() => { disposed = true })
+  await releasingOther.promise
+  await checkpoint()
+  assert.equal(disposed, false, 'one failed owner must not short-circuit the remaining cleanup')
+  releaseOther.resolve()
+  await disposal
+  assert.equal(warnings.some(message => message.includes('other owner cleanup failed')), true)
+  assert.deepEqual(old.released, [owner])
+  assert.deepEqual(current.released, [owner, current.requests[1].stateOwner], 'failed releases must not be retried by concurrent unload')
+})
+
 test('nested image, additional context and concludesTurn are deferred to outer result', { timeout: 5000 }, async t => {
   const f = await setup(t)
   const image = { type: 'image', attachment: { attachmentId: `sha256:${'a'.repeat(64)}`, mediaType: 'image/png', bytes: 1, width: 1, height: 1 } }
@@ -269,6 +465,7 @@ test('invalid arguments fail before runtime execution', { timeout: 5000 }, async
 test('unsupported language, timeout override and unenforceable sandbox fail clearly', { timeout: 5000 }, async t => {
   for (const [options, args, pattern] of [
     [{ runtime: { language: 'python' } }, {}, /Node TypeScript/],
+    [{ runtime: { programFormat: 'function-body' } }, {}, /会话级状态.*persistent-in-memory/],
     [{ runtime: { timeout: false } }, { timeoutMs: 10 }, /不支持 timeoutMs/],
     [{ runtime: { sandbox: false } }, {}, /无法实施.*workspace-write/],
   ]) await t.test(pattern.source, async subtest => { const f = await setup(subtest, options); failed(await execute(f, args), pattern); assert.equal(f.runtime.requests.length, 0) })

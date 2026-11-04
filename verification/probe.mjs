@@ -58,7 +58,7 @@ export function apply(ctx) {
         try { await tools.verify_denied({}); }
         catch (error) { failure = { typed: error instanceof ToolCallError, name: error.name, toolName: error.toolName, message: error.message }; }
         console.log('codebridge-smoke', doubled);
-        return { doubled, failure, pid: process.pid, cwd: process.cwd(), recursive: Object.keys(tools).some(name => ['codebridge_exec', 'codebridge_tools', 'run_code'].includes(name)) };
+        ({ doubled, failure, pid: process.pid, cwd: process.cwd(), recursive: Object.keys(tools).some(name => ['codebridge_exec', 'codebridge_tools', 'run_code'].includes(name)) });
       `)
       assert.equal(first.isError, false, JSON.stringify(first))
       assert.equal(first.value.result.doubled, 42)
@@ -76,21 +76,34 @@ export function apply(ctx) {
       assert.deepEqual(starts.map(event => event.data.subCallId), ends.map(event => event.data.subCallId))
       assert(ends[1].data.isError)
 
-      const deep = await exec('let value = 0; for (let i = 0; i < 10000; i++) value = [value]; return value;')
+      const deep = await exec('let value = 0; for (let i = 0; i < 10000; i++) value = [value]; value;')
       assert.equal(deep.isError, false, deep.error?.message)
       assert.equal(deep.content[0].text, '['.repeat(10000) + '0' + ']'.repeat(10000))
       const timeout = await exec('while (true) {}', 1500)
       assert.equal(timeout.isError, true)
       assert.match(timeout.error.message, /timeout/)
-      assert.equal((await exec('return 7')).value.result, 7)
-      assert.equal((await exec('globalThis.codebridgeMemory = 1; return true')).value.result, true)
-      assert.equal((await exec('return typeof globalThis.codebridgeMemory')).value.result, 'undefined')
-
+      assert.equal((await exec('7')).value.result, 7)
+      const firstState = await exec('globalThis.codebridgeMemory = 1; true')
+      assert.equal(firstState.value.result, true)
+      const secondState = await exec('globalThis.codebridgeMemory')
+      assert.equal(secondState.value.result, 1)
+      const persistentCell = await exec(`
+        const persistedValues = [3, 4]
+        function persistedTotal() { return persistedValues.reduce((sum, value) => sum + value, 0) }
+        ({ values: persistedValues, total: persistedTotal() })
+      `)
+      assert.deepEqual(persistentCell.value.result, { values: [3, 4], total: 7 })
+      const persistentNext = await exec('persistedTotal() + persistedValues.length')
+      assert.equal(persistentNext.value.result, 9)
+      const dynamicImport = await exec("const pathModule = await import('node:path'); pathModule.basename('/tmp/kept.txt')")
+      assert.equal(dynamicImport.value.result, 'kept.txt')
       setSandboxMode(session, 'read-only')
       const confined = await exec(`
         const fs = await import('node:fs/promises');
-        try { await fs.writeFile('codebridge-denied.txt', 'must not be written'); return { denied: false }; }
-        catch (error) { return { denied: true, code: error.code }; }
+        let confinedResult;
+        try { await fs.writeFile('codebridge-denied.txt', 'must not be written'); confinedResult = { denied: false }; }
+        catch (error) { confinedResult = { denied: true, code: error.code }; }
+        confinedResult;
       `)
       assert.equal(confined.isError, false, JSON.stringify(confined))
       assert.equal(confined.value.sandbox.mode, 'read-only')
@@ -101,7 +114,7 @@ export function apply(ctx) {
         runtime: '0.2.1-rc.5', nativeDirect: true, catalog: true,
         hostPid: process.pid, childPid: first.value.result.pid,
         typescript: true, guardedBinding: true, typedToolError: true,
-        nestedEventPairs: ends.length, timeoutAndRecovery: true, temporaryMemory: true,
+        nestedEventPairs: ends.length, timeoutAndRecovery: true, persistentSessionMemory: true,
         readOnlyWriteDenied: true, enforcement: confined.value.sandbox.enforcement,
       }
       await writeFile(join(process.env.DSH_HOME, 'evidence.json'), JSON.stringify(evidence, null, 2) + '\n')
