@@ -90,6 +90,14 @@ values.filter(value => value >= 8).map(value => value * 2)
 
 代码工具的规范返回值包含 `logs`，并可包含 `result`、`sandbox`、`preview` 和 `snapshot`。`console.log()` 写入日志，最后一个表达式提供 `result`；返回值必须是无损 JSON。日志和返回值同时存在时，展示文本会分区标明。
 
+### 调用输入展示
+
+在 Web GUI 展开 `codebridge_exec` 时，输入区直接显示 `code`，使用 TypeScript 语法高亮、行号和代码复制/换行控件；不再将源码嵌在参数 JSON 字符串中。代码在首次展开时按两空格缩进、单引号、保留分号和行宽 100 格式化，长代码可在输入区滚动查看。
+
+格式化仅用于展示，不修改实际执行的源码或原始调用记录，也不读取项目的格式化配置。等待格式化时先显示原始代码；无法格式化的源码继续以原文高亮展示，并显示提示。缺少字符串 `code` 或参数 JSON 无法解析时保留原始输入。输出、失败内容和子调用仍可查看；`codebridge_tools` 与其他工具的展示不变。
+
+更新后需重新加载插件并刷新 Web 页面，才能使用新的输入视图。
+
 ### 大输出与全文访问
 
 `maxInlineBytes` 控制展示正文的 UTF-8 字节预算，默认为 `32768`（32 KiB），允许 `1024`–`262144`，不含预览说明与取回提示。超过预算时，插件使用宿主已挂载的 `spillStore` 保存完整 JSON，再展示首尾预览。规范返回值中的 `logs`、`result` 不截断；新增的 `preview` 提供 `text`、`locator`、完整文件 `bytes` 和 `retrievalHint`。预览文本可能在 JSON 中间省略，不能当作完整 JSON 解析。

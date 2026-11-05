@@ -8,7 +8,7 @@
     "url": "git+https://github.com/MUKAPP/dsh-codebridge.git"
   },
   "icon": "./icon.svg",
-  "description": "在 DSH 标准模式中用 JavaScript/TypeScript 编排工具，支持可配置会话状态、重启 JSON 数据恢复、摘要搜索、可恢复的输出预览和只读环境诊断。",
+  "description": "在 DSH 标准模式中用 JavaScript/TypeScript 编排工具，支持格式化高亮的代码输入、可配置会话状态、重启 JSON 数据恢复、摘要搜索、可恢复的输出预览和只读环境诊断。",
   "type": "module",
   "main": "./lib/index.js",
   "types": "./lib/index.d.ts",
@@ -30,7 +30,8 @@
       "inject": [
         "@deepseek-ai/dsh-client-locale",
         "@deepseek-ai/dsh-client-ui-renderer",
-        "@deepseek-ai/dsh-client-ui-settings"
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-tool"
       ]
     }
   },
@@ -52,9 +53,13 @@
     "@deepseek-ai/dsh-agent": "0.2.2-rc.1",
     "@deepseek-ai/dsh-brand": "0.2.2-rc.1",
     "@deepseek-ai/dsh-client-locale": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-chat": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-conversation": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-primitives": "0.2.2-rc.1",
     "@deepseek-ai/dsh-client-ui-renderer": "0.2.2-rc.1",
     "@deepseek-ai/dsh-client-ui-settings": "0.2.2-rc.1",
     "@deepseek-ai/dsh-client-ui-slots": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-tool": "0.2.2-rc.1",
     "@deepseek-ai/dsh-llm": "0.2.2-rc.1",
     "@deepseek-ai/dsh-ptc-runtime": "0.2.2-rc.1",
     "@deepseek-ai/dsh-ptc-runtime-node": "0.2.2-rc.1",
@@ -72,6 +77,7 @@
     "zod": "4.4.3"
   },
   "dependencies": {
+    "prettier": "^3.9.10",
     "typescript": "~5.9.3"
   },
   "devDependencies": {

@@ -36,3 +36,5 @@ minimumReleaseAgeExclude:
   - '@deepseek-ai/dsh-util-values@0.2.2-rc.1'
   - '@deepseek-ai/dsh-working-directory@0.2.2-rc.1'
   - '@deepseek-ai/schemastery@3.19.0'
+  - '@deepseek-ai/dsh-client-ui-primitives@0.2.2-rc.1'
+  - '@deepseek-ai/dsh-client-ui-tool@0.2.2-rc.1'
