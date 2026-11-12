@@ -114,7 +114,7 @@ export function apply(ctx) {
       assert(['EACCES', 'EPERM'].includes(confined.value.result.code), JSON.stringify(confined.value.result))
       setSandboxMode(session, 'danger-full-access')
       const evidence = {
-        runtime: '0.2.2-rc.1', nativeDirect: true, catalog: true,
+        runtime: '0.2.2-rc.2', nativeDirect: true, catalog: true,
         hostPid: process.pid, childPid: first.value.result.pid,
         typescript: true, guardedBinding: true, typedToolError: true,
         nestedEventPairs: ends.length, timeoutAndRecovery: true, persistentSessionMemory: true,
