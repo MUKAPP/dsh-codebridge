@@ -1,6 +1,6 @@
 {
   "name": "dsh-codebridge",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
   "license": "MIT",
   "repository": {
@@ -8,7 +8,7 @@
     "url": "git+https://github.com/MUKAPP/dsh-codebridge.git"
   },
   "icon": "./icon.svg",
-  "description": "在 DSH 标准模式中用 JavaScript/TypeScript 编排工具，支持格式化高亮的代码输入、可配置会话状态、重启 JSON 数据恢复、摘要搜索、可恢复的输出预览和只读环境诊断。",
+  "description": "在 DSH 标准模式中用 JavaScript/TypeScript 编排工具，支持格式化高亮的代码输入、模型按次控制状态保留与临时隔离、重启 JSON 数据恢复、摘要搜索、可恢复的输出预览和只读环境诊断。",
   "type": "module",
   "main": "./lib/index.js",
   "types": "./lib/index.d.ts",

@@ -28,9 +28,8 @@ export const diagnosticsSchema = {
         language: { type: 'string' },
         isolation: { type: 'string' },
         programFormat: { type: 'string' },
-        stateRetention: { type: 'string', enum: ['session', 'call', 'unknown'] },
+        stateRetention: { type: 'string', enum: ['model-controlled', 'call', 'unknown'] },
         stateRecovery: { type: 'string', enum: ['process-only', 'json-snapshot', 'unknown'] },
-        retainSessionState: { type: 'boolean' },
         restoreOnRestart: { type: 'boolean' },
         filePolicySupported: { type: 'boolean' },
         timeout: {
@@ -62,13 +61,12 @@ export function collectDiagnostics(ctx: Context, exec: ToolRunContext, config: C
       issues.push(`当前运行时无法实施会话的 ${policy.mode} 文件权限。`)
     }
   }
-  const retainSessionState = config.retainSessionState.get()
   const restoreOnRestart = config.restoreOnRestart.get()
-  if (retainSessionState && restoreOnRestart && (ctx.get('sessionProjections') === undefined || ctx.get('sessions') === undefined || ctx.get('sessionPersistence') === undefined)) {
+  if (restoreOnRestart && (ctx.get('sessionProjections') === undefined || ctx.get('sessions') === undefined || ctx.get('sessionPersistence') === undefined)) {
     issues.push('重启恢复需要会话投影与会话持久化服务。')
   }
   const timeout = runtime?.timeout
-  const stateRetention: 'session' | 'call' = retainSessionState && runtime?.programFormat === 'repl' ? 'session' : 'call'
+  const stateRetention: 'model-controlled' | 'call' = runtime?.programFormat === 'repl' ? 'model-controlled' : 'call'
   return {
     configurationReady: issues.length === 0,
     cwd: ctx.workingDirectory.get(exec.agent.session),
@@ -81,13 +79,12 @@ export function collectDiagnostics(ctx: Context, exec: ToolRunContext, config: C
       isolation: runtime.isolation,
       programFormat: runtime.programFormat,
       stateRetention,
-      stateRecovery: stateRetention === 'session' && restoreOnRestart ? 'json-snapshot' as const : 'process-only' as const,
-      retainSessionState,
+      stateRecovery: stateRetention === 'model-controlled' && restoreOnRestart ? 'json-snapshot' as const : 'process-only' as const,
       restoreOnRestart,
       filePolicySupported: runtime.sandboxMode !== undefined,
       ...(timeout === undefined ? {} : { timeout }),
     },
     issues,
-    note: '仅检查配置与声明能力，未启动运行时、检查目录存在性或验证实际沙箱隔离。会话保留和 JSON 快照恢复按插件设置生效，子调用仍串行；运行时输出硬上限请查看 codebridge-runtime 配置。',
+    note: '仅检查配置与声明能力，未启动运行时、检查目录存在性或验证实际沙箱隔离。会话状态由每次 codebridge_exec 的 retainState 参数决定，JSON 快照恢复按插件设置生效，子调用仍串行；运行时输出硬上限请查看 codebridge-runtime 配置。',
   }
 }

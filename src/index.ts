@@ -13,11 +13,11 @@ export const inject = ['tools', 'sandboxPolicy', 'workingDirectory', 'systemProm
 export async function apply(ctx: Context, config: Config): Promise<void> {
   const snapshots = new SessionSnapshotStore(ctx, config)
   await snapshots.ready
-  registerStateModePrompt(ctx, config)
-  const lifecycle = new CallLifecycle(ctx, config, async exec => {
+  const lifecycle = new CallLifecycle(ctx, async exec => {
     const status = await snapshots.clear(exec)
     if (status.warning) throw new Error(status.warning)
   })
+  registerStateModePrompt(ctx, config, lifecycle)
   ctx.tools.register(createExecuteTool(ctx, lifecycle, snapshots, config))
   ctx.tools.register(createDescribeTool(ctx, config))
 }

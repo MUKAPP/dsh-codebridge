@@ -12,6 +12,12 @@ const FAILURE_HINTS: Record<PtcRunFailure['kind'], string> = {
   'sandbox-unavailable': '检查当前文件权限策略及运行时支持；环境诊断可用 codebridge_tools({diagnostics:true})。',
 }
 
+/** Node REPL 的致命结果需退役；中断状态不确定时也统一释放，普通异常和无效返回值可保留。 */
+export function runtimeFailureInvalidatesState(failure: PtcRunFailure): boolean {
+  return failure.kind === 'timeout' || failure.kind === 'abort' || failure.kind === 'worker-exit'
+    || failure.kind === 'output-limit' || failure.kind === 'protocol' || failure.kind === 'sandbox-unavailable'
+}
+
 export function runtimeFailureText(failure: PtcRunFailure, callId: string): string {
   return `代码执行失败（${failure.kind}）：${failure.message}\n阶段：运行程序；调用：${callId}\n${FAILURE_HINTS[failure.kind]}`
 }

@@ -10,5 +10,4 @@
       isolate:
         ptcRuntime: dsh-codebridge-runtime
       config:
-        retainSessionState: true
         restoreOnRestart: false

@@ -56,7 +56,7 @@ export function CodeBridgeSettings({ controller, t }: CodeBridgeSettingsProps) {
         }),
         createElement('span', null, t(name))),
       createElement('p', { id: inputId + '-hint', style: hintStyle },
-        t(name === 'retainSessionState' ? 'retainSessionStateHint' : 'restoreOnRestartHint')),
+        t('restoreOnRestartHint')),
       createElement('div', { style: actionsStyle },
         value.overridden ? createElement('span', { style: hintStyle }, t('overridden')) : null,
         createElement('button', {
@@ -83,7 +83,6 @@ export function CodeBridgeSettings({ controller, t }: CodeBridgeSettingsProps) {
     createElement('h3', { style: { margin: '0 0 6px' } }, t('title')),
     createElement('p', { style: hintStyle }, t('description'))),
   availability ? createElement('p', { role: 'status', style: hintStyle }, availability) : null,
-  field('retainSessionState'),
   field('restoreOnRestart'),
   createElement('div', { style: actionsStyle },
     createElement('button', {

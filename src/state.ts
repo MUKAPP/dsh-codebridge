@@ -8,6 +8,7 @@ import type { ProjectionHandle } from '@deepseek-ai/dsh-session-projection'
 import type {} from '@deepseek-ai/dsh-session-persistence'
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 import z from 'zod'
+import { runtimeFailureInvalidatesState } from './errors.js'
 import {
   SNAPSHOT_MAX_BYTES, collectSnapshotVariables, collectUnsupportedSnapshotNames, createSnapshotCodec,
   isSnapshotIdentifier, snapshotBootstrapProgram, snapshotCaptureProgram, snapshotProbeProgram, snapshotRestoreProgram,
@@ -32,15 +33,20 @@ const RecordSchema: z.ZodType<SnapshotRecord> = z.object({
 }).strict()
 const StateSchema: z.ZodType<SnapshotProjectionState> = z.object({ record: RecordSchema.nullable(), invalid: z.boolean() }).strict()
 
+export class SnapshotExecutionError extends Error {
+  constructor(message: string, readonly stateInvalidated: boolean) { super(message) }
+}
+
 export interface SnapshotStatus {
   /** True only after append, affirmative flush and read-back verification. */
   saved: boolean
+  /** Internal outcome; the execution tool removes this field from its snapshot payload. */
+  stateInvalidated?: boolean
   restored?: string[]
   omitted: string[]
   warning?: string
 }
 export interface SnapshotConfig {
-  retainSessionState: { get(): boolean }
   restoreOnRestart: { get(): boolean }
 }
 
@@ -118,7 +124,7 @@ export class SessionSnapshotStore {
     }).then(handle => { this.projection = handle })
   }
 
-  private enabled(): boolean { return this.config.retainSessionState.get() && this.config.restoreOnRestart.get() }
+  private enabled(): boolean { return this.config.restoreOnRestart.get() }
 
   private session(exec: ToolRunContext): Session {
     if (this.disposed) throw new Error('CodeBridge 快照服务已卸载。')
@@ -142,13 +148,18 @@ export class SessionSnapshotStore {
   ): Promise<PtcRunResult> {
     signal.throwIfAborted()
     if (runtime.sandboxMode === undefined && policy.mode !== 'danger-full-access') throw new Error('当前运行时无法实施快照所需的文件沙箱策略。')
-    const spec = runtime.resolve({
-      program, bindings, stateOwner: owner, cwd, signal,
-      ...(runtime.sandboxMode === undefined ? {} : { sandboxPolicy: policy }),
-      // Do not request an unlimited deadline; resolve supplies/caps the provider budget.
-    })
-    const result = await runtime.run(spec)
-    if (result.error !== undefined) throw new Error(`内部快照运行失败（${result.error.kind}）：${result.error.message}；运行时状态可能已被清空。`)
+    let result: PtcRunResult
+    try {
+      const spec = runtime.resolve({
+        program, bindings, stateOwner: owner, cwd, signal,
+        ...(runtime.sandboxMode === undefined ? {} : { sandboxPolicy: policy }),
+        // Do not request an unlimited deadline; resolve supplies/caps the provider budget.
+      })
+      result = await runtime.run(spec)
+    } catch (error) {
+      throw new SnapshotExecutionError('内部快照运行时调用失败：' + errorText(error), true)
+    }
+    if (result.error !== undefined) throw new SnapshotExecutionError(`内部快照运行失败（${result.error.kind}）：${result.error.message}；运行时状态可能已被清空。`, runtimeFailureInvalidatesState(result.error))
     signal.throwIfAborted()
     return result
   }
@@ -189,9 +200,8 @@ export class SessionSnapshotStore {
       }])
       if (entries.length > 0) await this.run(runtime, stateOwner, cwd, policy, signal, snapshotRestoreProgram(state.marker, entries))
     } catch (error) {
-      // Never leave a half-restored marker that could admit the next user cell.
-      await runtime.release(stateOwner)
-      throw error
+      // The execution lifecycle retires partly restored environments before admitting another cell.
+      throw new SnapshotExecutionError(errorText(error), true)
     }
     state.variables = new Map(entries.map(entry => [entry.name, entry.kind]))
     state.unsupported = new Set(ownRecord?.omitted ?? [])
@@ -285,7 +295,7 @@ export class SessionSnapshotStore {
     } catch (error) {
       // The user cell has already finished: no retry, no re-execution, no stale checkpoint.
       const cleared = session === undefined ? undefined : await this.invalidate(session)
-      return { saved: false, omitted, warning: `数据快照失败：${errorText(error)} 用户代码不会重跑；内部运行失败可能清空 REPL。${cleared?.warning ?? ''}` }
+      return { saved: false, omitted, stateInvalidated: error instanceof SnapshotExecutionError && error.stateInvalidated, warning: `数据快照失败：${errorText(error)} 用户代码不会重跑；内部运行失败可能清空 REPL。${cleared?.warning ?? ''}` }
     }
   }
 }

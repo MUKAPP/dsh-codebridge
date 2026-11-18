@@ -79,7 +79,7 @@ export async function invoke(f, name, args, extras = {}) {
   const outcome = prepared.kind === 'dispatch' ? await f.pipeline.dispatch(prepared.exec) : prepared
   return f.pipeline.complete(prepared.exec, outcome)
 }
-export function execute(f, args = {}, extras = {}) { return invoke(f, 'codebridge_exec', { code: 'return null', description: 'Run fixture', ...args }, extras) }
+export function execute(f, args = {}, extras = {}) { return invoke(f, 'codebridge_exec', { code: 'return null', description: 'Run fixture', retainState: true, ...args }, extras) }
 export function register(f, name = 'echo', overrides = {}, owner = f.ctx) {
   owner.tools.register(defineTool({
     name, description: `Fixture ${name}`, parameters: { value: { type: 'string', required: true } },

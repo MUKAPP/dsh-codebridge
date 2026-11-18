@@ -6,10 +6,6 @@ import type {} from '@deepseek-ai/dsh-sandbox-policy'
 import type {} from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/cordis-plugin-loader'
 
-export interface LifecycleConfig {
-  retainSessionState: { get(): boolean }
-}
-
 interface ActiveCall {
   state: SessionState
   mode: SandboxExecutionPolicy['mode']
@@ -21,7 +17,6 @@ interface SessionState {
   readonly session: object
   readonly sessionId: string
   owner: object | undefined
-  retained: boolean
   retentionEpoch: number
   readonly runtimes: Map<object, PtcRuntime>
   tail: Promise<void>
@@ -29,8 +24,12 @@ interface SessionState {
 }
 
 type CallBody<T> = (
-  signal: AbortSignal, policy: SandboxExecutionPolicy, stateOwner: object | undefined, runtime: PtcRuntime | undefined,
+  signal: AbortSignal, policy: SandboxExecutionPolicy, stateOwner: object | undefined, runtime: PtcRuntime | undefined, invalidateState: () => void,
 ) => Promise<T>
+
+type StateMode = boolean | 'isolated'
+
+type CleanupFailure<T> = (error: unknown, value: T | undefined) => Promise<never>
 
 /** 拥有完整代码调用，包含运行时启动前等待、会话状态串行化和子工具收尾。 */
 export class CallLifecycle {
@@ -42,12 +41,12 @@ export class CallLifecycle {
   private readonly policy
 
   constructor(
-    private readonly ctx: Context, private readonly config: LifecycleConfig,
+    private readonly ctx: Context,
     private readonly clearSnapshot?: (exec: ToolRunContext) => Promise<unknown>,
   ) {
     this.policy = ctx.sandboxPolicy
     ctx.on('loader/volatile-update', paths => {
-      if (paths.some(path => path[0] === 'retainSessionState' || path[0] === 'restoreOnRestart')) this.retentionEpoch++
+      if (paths.some(path => path[0] === 'restoreOnRestart')) this.retentionEpoch++
     })
     ctx.on('session/event', (session, event) => {
       if (event.type !== 'sandbox/mode') return
@@ -71,7 +70,7 @@ export class CallLifecycle {
   }
 
   /** 取消可提前退出等待，但原队列节点仍须经过尾链，不能让后续调用越过收尾。 */
-  async run<T>(exec: ToolRunContext, body: CallBody<T>): Promise<T> {
+  async run<T>(exec: ToolRunContext, mode: StateMode, body: CallBody<T>, onCleanupFailure?: CleanupFailure<T>): Promise<T> {
     const agent = exec.agent
     if (agent === undefined) throw new Error('CodeBridge 代码执行需要当前代理会话。')
     exec.signal.throwIfAborted()
@@ -84,9 +83,9 @@ export class CallLifecycle {
       started = true
       if (this.disposed || this.disposedSessions.has(state.session)) throw new Error('CodeBridge 会话状态已释放。')
       exec.signal.throwIfAborted()
-      await this.syncRetention(state, exec)
+      if (mode !== 'isolated') await this.syncState(state, exec)
       if (this.disposed || this.disposedSessions.has(state.session)) throw new Error('CodeBridge 会话状态已释放。')
-      return this.runActive(exec, state, body)
+      return this.runActive(exec, state, mode, body, onCleanupFailure)
     })
     state.tail = operation.then(() => {}, () => {})
     try {
@@ -109,12 +108,10 @@ export class CallLifecycle {
       if (existing.sessionId !== sessionId) throw new Error('CodeBridge 会话标识已变化。')
       return existing
     }
-    const retained = this.config.retainSessionState.get()
     const state: SessionState = {
       session,
       sessionId,
-      owner: retained ? {} : undefined,
-      retained,
+      owner: undefined,
       retentionEpoch: 0,
       runtimes: new Map(),
       tail: Promise.resolve(),
@@ -123,35 +120,62 @@ export class CallLifecycle {
     return state
   }
 
-  private async syncRetention(state: SessionState, exec: ToolRunContext): Promise<void> {
-    const retained = this.config.retainSessionState.get()
-    if (retained === state.retained && state.retentionEpoch === this.retentionEpoch) return
-    if (state.owner !== undefined) {
-      await this.releaseOwnedState(state)
-      state.owner = undefined
-      state.retained = false
-    }
-    await this.clearSnapshot?.(exec)
-    state.owner = retained ? {} : undefined
-    state.retained = retained
+  hasRetainedState(session: object): boolean {
+    const state = this.sessions.get(this.identity(session))
+    const runtime = this.ctx.get('ptcRuntime')
+    return !this.disposed && !this.disposedSessions.has(this.identity(session))
+      && state?.owner !== undefined && runtime !== undefined
+      && runtime.language === 'typescript' && runtime.programFormat === 'repl'
+      && state.runtimes.has(this.identity(runtime))
+      && state.retentionEpoch === this.retentionEpoch
+  }
+
+  private async resetState(state: SessionState, exec: ToolRunContext): Promise<void> {
+    // 清除失败时保留待同步标记；释放和快照失效都必须尝试，不能让旧快照复活。
+    state.retentionEpoch = -1
+    const results = await Promise.allSettled([this.releaseOwnedState(state), this.clearSnapshot?.(exec)])
+    if (results[0]!.status === 'fulfilled') state.owner = undefined
+    const errors = results.filter(result => result.status === 'rejected').map(result => result.reason)
+    if (errors.length > 0) throw new AggregateError(errors, errors.map(error => String(error)).join('\n'))
     state.retentionEpoch = this.retentionEpoch
   }
 
-  private async runActive<T>(exec: ToolRunContext, state: SessionState, body: CallBody<T>): Promise<T> {
+  private async syncState(state: SessionState, exec: ToolRunContext): Promise<void> {
+    if (state.retentionEpoch !== this.retentionEpoch) await this.resetState(state, exec)
+    state.owner ??= {}
+  }
+
+  private async runActive<T>(exec: ToolRunContext, state: SessionState, mode: StateMode, body: CallBody<T>, onCleanupFailure?: CleanupFailure<T>): Promise<T> {
     exec.signal.throwIfAborted()
     const policy = this.policy.resolve({ session: exec.agent!.session })
     // 在排队真正准入时读取 provider；释放始终使用这个实际接收 owner 的 generation。
     const runtime = this.ctx.get('ptcRuntime')
-    if (runtime !== undefined && state.owner !== undefined) state.runtimes.set(this.identity(runtime), runtime)
+    const owner = mode === 'isolated' ? undefined : state.owner
+    if (runtime !== undefined && owner !== undefined) state.runtimes.set(this.identity(runtime), runtime)
     const controller = new AbortController()
     const done = Promise.withResolvers<void>()
     const call: ActiveCall = { state, mode: policy.mode, controller, done: done.promise }
     this.calls.add(call)
+    let failure: unknown
+    let value: T | undefined
+    let retained = mode === true
     try {
-      return await body(AbortSignal.any([exec.signal, controller.signal]), policy, state.owner, runtime)
+      value = await body(AbortSignal.any([exec.signal, controller.signal]), policy, owner, runtime, () => { retained = false })
+      return value
+    } catch (error) {
+      failure = error
+      throw error
     } finally {
-      this.calls.delete(call)
-      done.resolve()
+      try {
+        if (mode !== 'isolated' && !retained) await this.resetState(state, exec)
+      } catch (error) {
+        const combined = failure === undefined ? error : new AggregateError([failure, error], String(failure) + '\n' + String(error))
+        if (onCleanupFailure !== undefined) await onCleanupFailure(combined, value)
+        throw combined
+      } finally {
+        this.calls.delete(call)
+        done.resolve()
+      }
     }
   }
 
@@ -181,7 +205,7 @@ export class CallLifecycle {
       }
     }))
     const errors = results.filter(result => result.status === 'rejected').map(result => result.reason)
-    if (errors.length > 0) throw new AggregateError(errors, 'CodeBridge 会话状态释放失败。')
+    if (errors.length > 0) throw new AggregateError(errors, 'CodeBridge 会话状态释放失败：' + errors.map(error => String(error)).join('\n'))
   }
 
   private async drainSession(state: SessionState): Promise<void> {

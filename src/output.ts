@@ -29,6 +29,8 @@ export const previewSchema = {
 } as const
 
 export interface ExecutionOutput {
+  isolated?: true
+  stateRetained?: boolean
   logs: string[]
   result?: JsonValue
   sandbox?: PtcRunSandbox
@@ -50,6 +52,8 @@ export function renderExecutionOutput(value: ExecutionOutput): string {
   if (value.snapshot?.warning) chunks.push(`重启恢复提示：${value.snapshot.warning}`)
   if (value.sandbox?.enforcement === 'partial') chunks.push('当前宿主仅部分实施文件沙箱限制。')
   if (value.sandbox?.denied) chunks.push(`文件操作被 ${value.sandbox.mode} 沙箱拒绝。`)
+  if (value.isolated && value.stateRetained !== undefined) chunks.push('临时执行环境已释放；本次调用未更改共享状态。')
+  else if (value.stateRetained !== undefined) chunks.push(value.stateRetained ? '执行状态已保留。' : '执行状态已释放。')
   return chunks.join('\n') || '代码执行完成，无输出。'
 }
 

@@ -3,14 +3,12 @@ import type { ConfigForm, ConfigFormSnapshot } from '@deepseek-ai/dsh-client-ui-
 export const SETTINGS_NAMESPACE = 'codebridge'
 
 export interface CodeBridgeSettings {
-  retainSessionState?: boolean
   restoreOnRestart?: boolean
 }
 
 export type SettingsField = keyof CodeBridgeSettings
 
 const defaults: Required<CodeBridgeSettings> = {
-  retainSessionState: true,
   restoreOnRestart: false,
 }
 
@@ -27,7 +25,6 @@ export interface CodeBridgeSettingsState {
   dirty: boolean
   saving: boolean
   result: 'saved' | 'failed' | undefined
-  retainSessionState: BooleanFieldState
   restoreOnRestart: BooleanFieldState
 }
 
@@ -38,7 +35,7 @@ function booleanValue(section: unknown, field: SettingsField): boolean {
   return typeof value === 'boolean' ? value : defaults[field]
 }
 
-/** Stages both switches and commits them in one revision-fenced mutation. */
+/** Stages restart recovery changes and commits a revision-fenced mutation. */
 export class CodeBridgeSettingsController {
   private readonly drafts = new Map<SettingsField, boolean | undefined>()
   private readonly listeners = new Set<() => void>()
@@ -78,7 +75,6 @@ export class CodeBridgeSettingsController {
       dirty: this.drafts.size > 0,
       saving: this.saving,
       result: this.result,
-      retainSessionState: this.field('retainSessionState', accepted),
       restoreOnRestart: this.field('restoreOnRestart', accepted),
     }
   }

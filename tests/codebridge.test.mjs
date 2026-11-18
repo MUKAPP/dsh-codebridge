@@ -23,7 +23,7 @@ test('native tools remain directly callable; bindings return canonical JSON inst
     return { logs: ['captured'], value: await functions(request).record({ value: 'nested' }) }
   }
   const code = 'return await tools.record({ value: "nested" })'
-  assert.deepEqual(ok(await execute(f, { code, timeoutMs: 75 })), { logs: ['captured'], result: { count: 7 } })
+  assert.deepEqual(ok(await execute(f, { code, timeoutMs: 75 })), { stateRetained: true, logs: ['captured'], result: { count: 7 } })
   const request = f.runtime.requests[0]
   assert.equal(request.program, code)
   assert.equal(request.cwd, f.agent.session.header.cwd)
@@ -103,6 +103,116 @@ test('subcalls and durable logs are serial; root/parent/call IDs and argument sn
   for (const event of events) { assert.equal(event.data.parentCallId, 'outer-call'); assert.equal(event.data.rootCallId, 'root-call') }
   assert.deepEqual(events[2].data.arguments, { value: 'second' })
 })
+
+test('omitting retainState consumes the prior environment and then releases it', { timeout: 5000 }, async t => {
+  const f = await setup(t)
+  const values = new WeakMap()
+  f.runtime.behavior = async request => {
+    if (request.program === 'seed') values.set(request.stateOwner, 41)
+    return { logs: [], value: values.get(request.stateOwner) ?? null }
+  }
+  f.runtime.releaseBehavior = async owner => { values.delete(owner) }
+  const seeded = ok(await execute(f, { code: 'seed', retainState: true }))
+  assert.equal(seeded.stateRetained, true)
+  const previous = f.runtime.requests[0].stateOwner
+  const last = ok(await invoke(f, 'codebridge_exec', { code: 'read', description: 'Finish retained work' }))
+  assert.equal(last.result, 41)
+  assert.equal(last.stateRetained, false)
+  assert.equal(f.runtime.requests[1].stateOwner, previous)
+  assert.deepEqual(f.runtime.released, [previous])
+  const fresh = ok(await invoke(f, 'codebridge_exec', { code: 'read', description: 'Independent work' }))
+  assert.equal(fresh.result, null)
+  assert.equal(fresh.stateRetained, false)
+  assert.notEqual(f.runtime.requests[2].stateOwner, previous)
+  const diagnostics = ok(await invoke(f, 'codebridge_tools', { diagnostics: true })).diagnostics
+  assert.equal(diagnostics.runtime.stateRetention, 'model-controlled')
+  assert.equal(Object.hasOwn(diagnostics.runtime, 'retainSessionState'), false)
+})
+
+test('non-retained execution drains child logs and owner release before admitting its successor', { timeout: 5000 }, async t => {
+  const f = await setup(t)
+  const logEntered = f.gate(), releaseLog = f.gate(), releasing = f.gate(), releaseOwner = f.gate()
+  register(f, 'child', { execute: async () => 42, output: { schema: { type: 'number' }, render: () => [] } })
+  f.ctx.on('tools/ptc-dispatch-log', async (_dispatch, next) => { logEntered.resolve(); await releaseLog.promise; return next() })
+  f.runtime.behavior = async request => ({ logs: [], value: f.runtime.requests.length === 1 ? await functions(request).child({ value: 'x' }) : 43 })
+  f.runtime.releaseBehavior = async () => { releasing.resolve(); await releaseOwner.promise }
+  const first = execute(f, { retainState: false })
+  await logEntered.promise
+  const next = execute(f, { retainState: true })
+  await checkpoint()
+  assert.equal(f.runtime.released.length, 0)
+  assert.equal(f.runtime.requests.length, 1)
+  releaseLog.resolve()
+  await releasing.promise
+  await checkpoint()
+  assert.equal(f.runtime.requests.length, 1, 'the next cell cannot pass unfinished owner cleanup')
+  releaseOwner.resolve()
+  assert.equal(ok(await first).stateRetained, false)
+  assert.equal(ok(await next).result, 43)
+  assert.notEqual(f.runtime.requests[0].stateOwner, f.runtime.requests[1].stateOwner)
+})
+
+test('release failure preserves completed logs and result without rerunning the user cell', { timeout: 5000 }, async t => {
+  const f = await setup(t)
+  f.runtime.behavior = async () => ({ logs: ['finished log'], value: 99 })
+  f.runtime.releaseBehavior = async () => { throw new Error('cleanup failed') }
+  const result = failed(await execute(f, { retainState: false }), /释放执行状态失败/)
+  assert.match(result.error.message, /cleanup failed/)
+  assert.match(result.error.message, /finished log.*99/s)
+  assert.equal(f.runtime.requests.length, 1)
+  f.runtime.releaseBehavior = async () => {}
+  ok(await execute(f, { retainState: true }))
+  assert.notEqual(f.runtime.requests[0].stateOwner, f.runtime.requests[1].stateOwner)
+})
+
+test('non-retained failed cells still release their environment after reporting the runtime error', async t => {
+  const f = await setup(t)
+  f.runtime.behavior = async () => ({ logs: ['before timeout'], error: { kind: 'timeout', message: 'controlled timeout' } })
+  const result = failed(await execute(f, { retainState: false }), /controlled timeout/)
+  assert.match(result.error.message, /before timeout/)
+  assert.deepEqual(f.runtime.released, [f.runtime.requests[0].stateOwner])
+})
+
+for (const [kind, retired] of [['output-limit', true], ['timeout', true], ['exception', false], ['invalid-output', false]]) {
+  test('retained execution reports environment disposition after ' + kind, async t => {
+    const f = await setup(t)
+    f.runtime.behavior = async () => ({ logs: [], error: { kind, message: 'controlled ' + kind } })
+    failed(await execute(f, { retainState: true }))
+    assert.equal(f.runtime.released.length, retired ? 1 : 0)
+    const assembly = await f.ctx.systemPrompt.assemble({ scope: f.agent, agent: f.agent })
+    const state = assembly.contexts.find(item => item.name === 'codebridge:execution-state').text
+    assert.match(state, retired ? /当前没有可续用的执行环境/ : /已保留执行环境/)
+  })
+}
+
+for (const unload of [false, true]) {
+  test('cleanup failure preview drains before ' + (unload ? 'plugin unload' : 'the successor starts'), { timeout: 5000 }, async t => {
+    const f = await setup(t)
+    const saving = f.gate(), finishSaving = f.gate()
+    f.ctx.provide('spillStore', {
+      saveText: async request => {
+        saving.resolve()
+        await finishSaving.promise
+        return { locator: 'fixture:cleanup-report', bytes: Buffer.byteLength(request.content), retrievalHint: 'Read the fixture report' }
+      },
+    })
+    let releases = 0
+    f.runtime.releaseBehavior = async () => { if (++releases === 1) throw new Error('cleanup failed ' + 'x'.repeat(5000)) }
+    f.runtime.behavior = async () => ({ logs: ['completed'], value: 17 })
+    const pending = execute(f, { retainState: false, maxInlineBytes: 1024 })
+    await saving.promise
+    let disposed = false
+    const later = unload ? f.plugin.dispose().then(() => { disposed = true }) : execute(f, { retainState: true })
+    await checkpoint()
+    assert.equal(f.runtime.requests.length, 1)
+    assert.equal(disposed, false)
+    finishSaving.resolve()
+    const result = failed(await pending, /fixture:cleanup-report/)
+    assert.equal(result.error.info.code, 'CODEBRIDGE_EXEC_FAILED')
+    if (unload) { await later; assert.equal(disposed, true) }
+    else assert.equal(ok(await later).result, 17)
+  })
+}
 
 test('session state owners are reused per session and executions are serialized', { timeout: 5000 }, async t => {
   const f = await setup(t)
@@ -214,6 +324,8 @@ for (const replacement of [false, true]) {
     await f.removeRuntime()
     const current = replacement ? await f.installRuntime() : undefined
     if (current) current.behavior = async () => ({ logs: [], value: 'current' })
+    const assembly = await f.ctx.systemPrompt.assemble({ scope: f.agent, agent: f.agent })
+    assert.match(assembly.contexts.find(item => item.name === 'codebridge:execution-state').text, /当前没有可续用的执行环境/)
     release.resolve()
     assert.equal(ok(await first).result, 'old')
     if (current) {
@@ -552,10 +664,10 @@ test('renderer accepts deeply nested JSON and preserves mixed JSON escaping and 
   f.runtime.behavior = async () => ({ logs: [], value })
   const deep = await execute(f)
   ok(deep)
-  assert.equal(text(deep), `${'['.repeat(10_000)}0${']'.repeat(10_000)}`)
+  assert.equal(text(deep), `${'['.repeat(10_000)}0${']'.repeat(10_000)}` + '\n执行状态已保留。')
   const mixed = { quote: '"\\\n\t', empty: [], object: {}, values: [null, true, false, -1.5, { nested: '中文' }] }
   f.runtime.behavior = async () => ({ logs: [], value: mixed })
   const result = await execute(f)
   assert.deepEqual(ok(result).result, mixed)
-  assert.equal(text(result), JSON.stringify(mixed))
+  assert.equal(text(result), JSON.stringify(mixed) + '\n执行状态已保留。')
 })

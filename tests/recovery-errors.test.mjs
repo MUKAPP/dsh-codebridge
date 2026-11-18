@@ -2,12 +2,13 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { CallLifecycle } from '../lib/lifecycle.js'
 import { createExecuteTool } from '../lib/execute.js'
+import { SessionSnapshotStore, SnapshotExecutionError } from '../lib/state.js'
 import { setup, execute, failed } from './fixture.mjs'
 
 async function setupRecovery(t, overrides = {}) {
   const f = await setup(t)
   await f.plugin.dispose()
-  const config = { retainSessionState: { get: () => true }, restoreOnRestart: { get: () => true } }
+  const config = { restoreOnRestart: { get: () => true } }
   const clears = []
   const snapshots = {
     prepare: async () => ({ restored: [], omitted: [] }),
@@ -16,10 +17,77 @@ async function setupRecovery(t, overrides = {}) {
     ...overrides,
   }
   await f.ctx.plugin(Object.assign(inner => {
-    const lifecycle = new CallLifecycle(inner, config)
+    const lifecycle = new CallLifecycle(inner, async exec => {
+      const status = await snapshots.clear(exec)
+      if (status.warning) throw new Error(status.warning)
+    })
     inner.tools.register(createExecuteTool(inner, lifecycle, snapshots, config))
   }, { inject: ['tools', 'sandboxPolicy', 'workingDirectory'] }))
   return { ...f, clears }
+}
+
+test('a non-retained successful cell restores prior data but skips capture and clears the baseline', async t => {
+  let captures = 0
+  const f = await setupRecovery(t, {
+    prepare: async () => ({ restored: ['previousData'], omitted: [] }),
+    capture: async () => { captures++; return { saved: true, omitted: [] } },
+  })
+  f.runtime.behavior = async () => ({ logs: ['consumed prior data'], value: 23 })
+  const result = await execute(f, { retainState: false })
+  assert.equal(result.isError, false, result.error?.message)
+  assert.equal(result.value.stateRetained, false)
+  assert.equal(result.value.result, 23)
+  assert.deepEqual(result.value.snapshot, { saved: false, restored: ['previousData'], omitted: [] })
+  assert.equal(captures, 0)
+  assert.equal(f.clears.length, 1)
+  assert.deepEqual(f.runtime.released, [f.runtime.requests[0].stateOwner])
+})
+
+for (const invalidated of [false, true]) {
+  test('snapshot failure only retires an explicitly invalidated environment: ' + invalidated, async t => {
+    const f = await setupRecovery(t, {
+      capture: async () => ({ saved: false, omitted: ['data'], warning: invalidated ? 'output-limit' : 'flush unavailable', stateInvalidated: invalidated }),
+    })
+    f.runtime.behavior = async () => ({ logs: ['completed data work'], value: 31 })
+    const result = await execute(f, { retainState: true })
+    assert.equal(result.isError, false, result.error?.message)
+    assert.equal(result.value.result, 31)
+    assert.deepEqual(result.value.logs, ['completed data work'])
+    assert.equal(result.value.stateRetained, !invalidated)
+    assert.equal(Object.hasOwn(result.value.snapshot, 'stateInvalidated'), false)
+    assert.equal(f.runtime.released.length, invalidated ? 1 : 0)
+  })
+}
+
+test('failed restoration invalidates the owner before another cell can reuse it', async t => {
+  const f = await setupRecovery(t, { prepare: async () => { throw new SnapshotExecutionError('partial restore failed', true) } })
+  failed(await execute(f, { retainState: true }), /partial restore failed/)
+  assert.equal(f.runtime.requests.length, 0)
+  assert.equal(f.runtime.released.length, 1)
+  assert.equal(f.clears.length, 1)
+})
+
+for (const phase of ['resolve', 'run']) {
+  test('snapshot runtime ' + phase + ' rejection is an explicit environment invalidation', async t => {
+    const f = await setup(t)
+    f.ctx.provide('sessionProjections', {
+      register: async () => ({ stateOf: () => ({ record: null, invalid: false }) }),
+    })
+    const store = new SessionSnapshotStore(f.ctx, { restoreOnRestart: { get: () => true } })
+    await store.ready
+    const exec = { agent: f.agent, signal: new AbortController().signal, callId: 'snapshot-rejection' }
+    const policy = { mode: 'workspace-write', workspaceRoot: f.agent.session.header.cwd }
+    const owner = {}
+    let calls = 0
+    f.runtime.behavior = async () => ({ logs: [], value: ++calls === 1 ? false : true })
+    await store.prepare(exec, f.runtime, owner, f.agent.session.header.cwd, policy, exec.signal)
+    if (phase === 'resolve') f.runtime.resolve = () => { throw new Error('resolve after disposal') }
+    else f.runtime.behavior = async () => { throw new Error('run after disposal') }
+    const captured = await store.capture(exec, f.runtime, owner, f.agent.session.header.cwd, policy, exec.signal, 'const data = 1')
+    assert.equal(captured.saved, false)
+    assert.equal(captured.stateInvalidated, true)
+    assert.match(captured.warning, /after disposal/)
+  })
 }
 
 test('a cancelled user cell invalidates its checkpoint after runtime drainage', { timeout: 5000 }, async t => {

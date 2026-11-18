@@ -43,8 +43,8 @@ export function apply(ctx) {
       })
       return batch.results[0].result
     }
-    const exec = (code, timeoutMs) => invoke('codebridge_exec', {
-      description: 'CodeBridge independent profile verification', code,
+    const exec = (code, timeoutMs, retainState = true) => invoke('codebridge_exec', {
+      description: 'CodeBridge independent profile verification', code, retainState,
       ...(timeoutMs === undefined ? {} : { timeoutMs }),
     })
     try {
@@ -81,7 +81,7 @@ export function apply(ctx) {
 
       const deep = await exec('let value = 0; for (let i = 0; i < 10000; i++) value = [value]; value;')
       assert.equal(deep.isError, false, deep.error?.message)
-      assert.equal(deep.content[0].text, '['.repeat(10000) + '0' + ']'.repeat(10000))
+      assert.equal(deep.content[0].text, '['.repeat(10000) + '0' + ']'.repeat(10000) + '\n执行状态已保留。')
       const timeout = await exec('while (true) {}', 1500)
       assert.equal(timeout.isError, true)
       assert.match(timeout.error.message, /timeout/)
@@ -100,6 +100,15 @@ export function apply(ctx) {
       assert.equal(persistentNext.value.result, 9)
       const dynamicImport = await exec("const pathModule = await import('node:path'); pathModule.basename('/tmp/kept.txt')")
       assert.equal(dynamicImport.value.result, 'kept.txt')
+      const consumed = await exec('persistedTotal() + persistedValues.length', undefined, false)
+      assert.equal(consumed.value.result, 9)
+      assert.equal(consumed.value.stateRetained, false)
+      const discarded = await exec("({ data: typeof persistedValues, fn: typeof persistedTotal, module: typeof pathModule })")
+      assert.deepEqual(discarded.value.result, { data: 'undefined', fn: 'undefined', module: 'undefined' })
+      const transient = await invoke('codebridge_exec', { code: 'const temporaryValue = 71; temporaryValue', description: 'Verify default release' })
+      assert.equal(transient.isError, false, JSON.stringify(transient))
+      assert.equal(transient.value.stateRetained, false)
+      assert.equal((await exec('typeof temporaryValue')).value.result, 'undefined')
       setSandboxMode(session, 'read-only')
       const confined = await exec(`
         const fs = await import('node:fs/promises');
@@ -114,10 +123,10 @@ export function apply(ctx) {
       assert(['EACCES', 'EPERM'].includes(confined.value.result.code), JSON.stringify(confined.value.result))
       setSandboxMode(session, 'danger-full-access')
       const evidence = {
-        runtime: '0.2.2-rc.2', nativeDirect: true, catalog: true,
+        runtime: '0.2.2-rc.3', nativeDirect: true, catalog: true,
         hostPid: process.pid, childPid: first.value.result.pid,
         typescript: true, guardedBinding: true, typedToolError: true,
-        nestedEventPairs: ends.length, timeoutAndRecovery: true, persistentSessionMemory: true,
+        nestedEventPairs: ends.length, timeoutAndRecovery: true, persistentSessionMemory: true, perCallRetention: true, defaultRelease: true,
         readOnlyWriteDenied: true, enforcement: confined.value.sandbox.enforcement,
       }
       await writeFile(join(process.env.DSH_HOME, 'evidence.json'), JSON.stringify(evidence, null, 2) + '\n')

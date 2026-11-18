@@ -30,9 +30,12 @@ const probe = join(root, 'verification', restart ? 'restart-probe.mjs' : 'probe.
 writeFileSync(join(profile, 'cordis.patch.yml'), `${patch}    - id: verification\n      name: '${probe.replaceAll("'", "''")}'\n`)
 if (restart) {
   const storage = join(home, 'sessions').replaceAll('\\', '/')
-  const restartPatch = `- id: codebridge
+  const restartPatch = `- id: codebridge-runtime
   config:
-    retainSessionState: true
+    executionMode: persistent-in-memory
+    maxOutputBytes: 1024
+- id: codebridge
+  config:
     restoreOnRestart: true
 - insert:
     - id: restart-persistence
@@ -49,7 +52,7 @@ if (restart) {
 }
 const env = { ...process.env, DSH_HOME: home, CODEBRIDGE_RESTART_ID: `codebridge-restart-${Date.now()}` }
 if (process.argv.includes('--electron')) env.ELECTRON_RUN_AS_NODE = '1'
-for (const phase of restart ? ['seed', 'restore'] : ['default']) {
+for (const phase of restart ? ['seed', 'restore', 'discarded'] : ['default']) {
   const code = await new Promise((resolve, reject) => {
     const child = spawn(executable, [entry, '--profile', 'codebridge-verify'], {
       cwd: workspace, env: { ...env, CODEBRIDGE_RESTART_PHASE: phase }, stdio: ['inherit', 'pipe', 'inherit'],
@@ -59,7 +62,7 @@ for (const phase of restart ? ['seed', 'restore'] : ['default']) {
     child.on('error', reject)
     child.on('exit', (code, signal) => {
       if (signal) console.error(`Verification terminated by ${signal}`)
-      const expected = phase === 'seed' ? 'CODEBRIDGE_RESTART_SEEDED' : phase === 'restore' ? 'CODEBRIDGE_RESTART_VERIFIED' : 'CODEBRIDGE_VERIFIED'
+      const expected = phase === 'seed' ? 'CODEBRIDGE_RESTART_SEEDED' : phase === 'restore' ? 'CODEBRIDGE_RESTART_VERIFIED' : phase === 'discarded' ? 'CODEBRIDGE_RESTART_DISCARDED' : 'CODEBRIDGE_VERIFIED'
       if (code === 0 && !output.includes(expected)) {
         console.error(`Verification did not reach ${expected}`)
         resolve(1)
