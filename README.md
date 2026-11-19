@@ -4,7 +4,7 @@
 
 让 **DSH 标准模式**也能用代码调用工具：执行 JavaScript / TypeScript，由模型按次决定是否保留变量、函数、导入和中间结果，通过 `tools.*` 完成多步操作，再把需要的结果返回给模型。原有工具仍可直接调用。
 
-**兼容 DSH `0.2.2-rc.3` · Node.js `>=24.9.0` · MIT**
+**DSH 版本要求：`<0.3` · Node.js `>=24.9.0` · MIT**
 
 ## 安装
 
@@ -22,7 +22,7 @@ https://github.com/MUKAPP/dsh-codebridge.git
 dsh plugin --profile web add https://github.com/MUKAPP/dsh-codebridge.git
 ```
 
-安装会影响使用该 profile 的所有会话。当前只声明支持上述 DSH 版本，其他版本需先适配，不能靠忽略版本检查保证兼容。
+安装会影响使用该 profile 的所有会话。`<0.3` 是插件管理器的版本检查范围，不含 `0.3.0` 的预发布版。构建使用 DSH `0.2.2-rc.3` SDK；通过版本检查不代表插件已在该宿主版本上验证。
 
 ## 能做什么
 
