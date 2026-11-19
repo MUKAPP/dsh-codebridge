@@ -8,7 +8,7 @@
 
 ## 安装
 
-在 DSH 的 **插件 → 添加插件** 中输入 `dsh-codebridge`，即可从 npm 安装预编译包。也可输入 `dsh-codebridge@0.1.5` 指定版本。命令行安装到 `web` profile：
+在 DSH 的 **插件 → 添加插件** 中输入 `dsh-codebridge`，即可从 npm 安装预编译包。也可输入 `dsh-codebridge@0.1.6` 指定版本。命令行安装到 `web` profile：
 
 ```sh
 dsh plugin --profile web add dsh-codebridge
