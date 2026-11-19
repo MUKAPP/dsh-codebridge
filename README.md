@@ -8,19 +8,15 @@
 
 ## 安装
 
-在 DSH 的**插件 → 添加插件**中输入 GitHub 地址：
-
-```text
-https://github.com/MUKAPP/dsh-codebridge.git
-```
-
-安装时会从源码编译插件。如果管理器提示构建脚本待批准，核对本仓库的编译脚本后选择允许并重试；`prepare` 和 `prepack` 会编译 Host 与 Web 客户端。安装完成后按管理器提示启用或重启 DSH。仅刷新浏览器页面不会重新加载 Host 插件。
-
-命令行用户也可安装到指定 profile，以下以 `web` 为例：
+在 DSH 的 **插件 → 添加插件** 中输入 `dsh-codebridge`，即可从 npm 安装预编译包。也可输入 `dsh-codebridge@0.1.5` 指定版本。命令行安装到 `web` profile：
 
 ```sh
-dsh plugin --profile web add https://github.com/MUKAPP/dsh-codebridge.git
+dsh plugin --profile web add dsh-codebridge
 ```
+
+也可从 [GitHub Releases](https://github.com/MUKAPP/dsh-codebridge/releases) 获取已发布版本的 `.tgz`，将 Assets 下的下载地址粘贴到同一入口。npm 和 Release 安装包都已编译，无需批准 CodeBridge 的源码构建脚本。
+
+需要从源码安装时，可在同一入口输入 `https://github.com/MUKAPP/dsh-codebridge.git`。如果管理器提示构建脚本待批准，核对脚本后选择允许并重试。安装完成后按管理器提示启用或重启 DSH。仅刷新浏览器页面不会重新加载 Host 插件。
 
 安装会影响使用该 profile 的所有会话。`<0.3` 是插件管理器的版本检查范围，不含 `0.3.0` 的预发布版。构建使用 DSH `0.2.2-rc.3` SDK；通过版本检查不代表插件已在该宿主版本上验证。
 
@@ -200,6 +196,17 @@ pnpm pack --pack-destination artifacts
 添加 `--restart` 可在 `verification/.profile/restart` 中运行真实 JSONL 持久化和三个独立 DSH Host 进程，验证变量恢复、不重复执行外部操作、会话隔离、设置服务热更新，以及隔离调用保留共享快照、释放后的数据在再次重启时不会恢复。
 
 已有验证覆盖工具可见性、规范 JSON、串行调度、取消与卸载、会话隔离，以及真实 Node 子进程中的超时恢复、深层 JSON 和只读写入拒绝。开发规则见 [AGENTS.md](AGENTS.md)。
+
+## 发布
+
+更新 [package.json](package.json) 中的版本号，并推送包含该版本和发布工作流的提交。以 `0.1.5` 为例，在对应提交上创建并推送标签：
+
+```sh
+git tag -a v0.1.5 -m "Release v0.1.5"
+git push origin v0.1.5
+```
+
+[发布工作流](.github/workflows/release.yml)只在推送 `vX.Y.Z` 标签时运行。标签与包版本一致、类型检查和测试通过后，GitHub Actions 会创建对应的 GitHub Release，并上传一个预编译的 `.tgz`。普通提交和 PR 不触发发布；npm 独立发布，不由此工作流上传。
 
 ## 许可证
 
