@@ -6,11 +6,13 @@ on:
       - 'v[0-9]+.[0-9]+.[0-9]+'
 
 jobs:
-  release:
+  build:
     if: ${{ !github.event.deleted }}
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
+    outputs:
+      artifact-id: ${{ steps.package.outputs.artifact-id }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -22,12 +24,14 @@ jobs:
       - uses: pnpm/action-setup@v6
 
       - name: Verify release version
+        id: version
         run: |
           version=$(node -p "require('./package.json').version")
           if [[ "$GITHUB_REF_NAME" != "v$version" ]]; then
             echo "Tag $GITHUB_REF_NAME does not match package version $version." >&2
             exit 1
           fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts --config.strict-dep-builds=false
@@ -37,7 +41,46 @@ jobs:
         run: pnpm pack --pack-destination artifacts
       - name: Test plugin
         run: pnpm test
+      - name: Share release package
+        id: package
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-package-${{ github.run_attempt }}
+          path: artifacts/dsh-codebridge-${{ steps.version.outputs.version }}.tgz
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
 
+  publish-npm:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+          merge-multiple: true
+          path: artifacts
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org/'
+          package-manager-cache: false
+      - name: Publish to npm
+        run: npm publish "./artifacts/dsh-codebridge-${GITHUB_REF_NAME#v}.tgz" --access public
+
+  publish-github:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+          merge-multiple: true
+          path: artifacts
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}

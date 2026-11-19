@@ -199,14 +199,16 @@ pnpm pack --pack-destination artifacts
 
 ## 发布
 
-更新 [package.json](package.json) 中的版本号，并推送包含该版本和发布工作流的提交。以 `0.1.5` 为例，在对应提交上创建并推送标签：
+首次启用 npm 自动发布时，在 [npm 包页面](https://www.npmjs.com/package/dsh-codebridge)的 **Settings → Trusted publishing** 中添加 GitHub Actions 发布者：**Organization or user** 填 `MUKAPP`，**Repository** 填 `dsh-codebridge`，**Workflow filename** 填 `release.yml`，**Environment name** 留空，**Allowed actions** 勾选 `npm publish`。无需在 GitHub 配置 npm 令牌。新绑定需在两天内完成首次成功发布，详见 [npm 官方说明](https://docs.npmjs.com/trusted-publishers/)。
+
+将 [package.json](package.json) 的版本更新为 npm 尚未发布的版本，并推送包含该版本和发布工作流的提交。以 `0.1.6` 为例，在对应提交上创建并推送标签：
 
 ```sh
-git tag -a v0.1.5 -m "Release v0.1.5"
-git push origin v0.1.5
+git tag -a v0.1.6 -m "Release v0.1.6"
+git push origin v0.1.6
 ```
 
-[发布工作流](.github/workflows/release.yml)只在推送 `vX.Y.Z` 标签时运行。标签与包版本一致、类型检查和测试通过后，GitHub Actions 会创建对应的 GitHub Release，并上传一个预编译的 `.tgz`。普通提交和 PR 不触发发布；npm 独立发布，不由此工作流上传。
+[发布工作流](.github/workflows/release.yml)只在推送 `vX.Y.Z` 标签时运行。标签与包版本一致、类型检查和测试通过后，两个发布作业分别将同一份预编译 `.tgz` 上传到 npm 和 GitHub Releases。普通提交和 PR 不触发发布。某个发布作业失败时，可在构建产物的七天保留期内只重跑失败的作业，避免重复发布另一渠道。
 
 ## 许可证
 
