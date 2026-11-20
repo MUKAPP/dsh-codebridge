@@ -1,4 +1,12 @@
-import ts from 'typescript'
+import { createRequire } from 'node:module'
+import type ts from 'typescript'
+
+const require = createRequire(import.meta.url)
+let compiler: typeof ts | undefined
+// Projection reducers validate synchronously, including when replaying older snapshots.
+function snapshotCompiler(): typeof ts {
+  return compiler ??= require('typescript') as typeof ts
+}
 
 export const SNAPSHOT_MAX_BYTES = 1024 * 1024
 export const SNAPSHOT_INTERNAL_PREFIX = '__codebridge_snapshot_'
@@ -10,6 +18,7 @@ export interface EncodedSnapshot { entries: SnapshotEntry[]; omitted: string[]; 
 /** Only identifiers, never source fragments, may enter an internal read/declaration. */
 export function isSnapshotIdentifier(name: string): boolean {
   if (name.startsWith(SNAPSHOT_INTERNAL_PREFIX) || name.startsWith('codebridge_snapshot_') || ['eval', 'arguments', 'await', 'yield', 'let', 'implements', 'interface', 'package', 'private', 'protected', 'public', 'static'].includes(name)) return false
+  const ts = snapshotCompiler()
   const scanner = ts.createScanner(ts.ScriptTarget.Latest, false, ts.LanguageVariant.Standard, name)
   const token = scanner.scan()
   const identifier = token === ts.SyntaxKind.Identifier || token >= ts.SyntaxKind.AbstractKeyword && token <= ts.SyntaxKind.OfKeyword
@@ -17,10 +26,27 @@ export function isSnapshotIdentifier(name: string): boolean {
 }
 
 /** Deliberately do not descend into blocks, loops, functions or namespaces. */
-export function collectSnapshotVariables(code: string): SnapshotVariable[] {
-  const source = ts.createSourceFile('cell.ts', code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+export function collectTopLevelDeclarations(code: string): { variables: SnapshotVariable[]; unsupported: string[] } {
+  const ts = snapshotCompiler()
+  const source = ts.createSourceFile('cell.ts', code, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS)
   const variables = new Map<string, SnapshotDeclarationKind>()
+  const unsupported = new Set<string>()
+  const addUnsupported = (name: ts.Identifier | undefined): void => {
+    if (name && isSnapshotIdentifier(name.text)) unsupported.add(name.text)
+  }
   for (const statement of source.statements) {
+    if (ts.isFunctionDeclaration(statement) && statement.body || ts.isClassDeclaration(statement) || ts.isEnumDeclaration(statement)) {
+      addUnsupported(statement.name)
+    } else if (ts.isImportDeclaration(statement)) {
+      const clause = statement.importClause
+      if (!clause || clause.isTypeOnly) continue
+      addUnsupported(clause.name)
+      if (clause.namedBindings) {
+        if (ts.isNamespaceImport(clause.namedBindings)) addUnsupported(clause.namedBindings.name)
+        else for (const specifier of clause.namedBindings.elements) if (!specifier.isTypeOnly) addUnsupported(specifier.name)
+      }
+    } else if (ts.isImportEqualsDeclaration(statement) && !statement.isTypeOnly) addUnsupported(statement.name)
+
     if (!ts.isVariableStatement(statement) || statement.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.DeclareKeyword)) continue
     const flags = statement.declarationList.flags
     if (flags & ts.NodeFlags.Using) continue
@@ -38,30 +64,16 @@ export function collectSnapshotVariables(code: string): SnapshotVariable[] {
       }
     }
   }
-  return [...variables].map(([name, kind]) => ({ name, kind }))
+  return { variables: [...variables].map(([name, kind]) => ({ name, kind })), unsupported: [...unsupported] }
+}
+
+export function collectSnapshotVariables(code: string): SnapshotVariable[] {
+  return collectTopLevelDeclarations(code).variables
 }
 
 /** Runtime declarations that are reported but never read or replayed. */
 export function collectUnsupportedSnapshotNames(code: string): string[] {
-  const source = ts.createSourceFile('cell.ts', code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
-  const names = new Set<string>()
-  const add = (name: ts.Identifier | undefined): void => {
-    if (name && isSnapshotIdentifier(name.text)) names.add(name.text)
-  }
-  for (const statement of source.statements) {
-    if (ts.isFunctionDeclaration(statement) && statement.body || ts.isClassDeclaration(statement) || ts.isEnumDeclaration(statement)) {
-      add(statement.name)
-    } else if (ts.isImportDeclaration(statement)) {
-      const clause = statement.importClause
-      if (!clause || clause.isTypeOnly) continue
-      add(clause.name)
-      if (clause.namedBindings) {
-        if (ts.isNamespaceImport(clause.namedBindings)) add(clause.namedBindings.name)
-        else for (const specifier of clause.namedBindings.elements) if (!specifier.isTypeOnly) add(specifier.name)
-      }
-    } else if (ts.isImportEqualsDeclaration(statement) && !statement.isTypeOnly) add(statement.name)
-  }
-  return [...names]
+  return collectTopLevelDeclarations(code).unsupported
 }
 
 /**

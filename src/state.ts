@@ -10,7 +10,7 @@ import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 import z from 'zod'
 import { runtimeFailureInvalidatesState } from './errors.js'
 import {
-  SNAPSHOT_MAX_BYTES, collectSnapshotVariables, collectUnsupportedSnapshotNames, createSnapshotCodec,
+  SNAPSHOT_MAX_BYTES, collectTopLevelDeclarations, createSnapshotCodec,
   isSnapshotIdentifier, snapshotBootstrapProgram, snapshotCaptureProgram, snapshotProbeProgram, snapshotRestoreProgram,
   type SnapshotDeclarationKind, type SnapshotVariable,
 } from './snapshot-program.js'
@@ -166,7 +166,7 @@ export class SessionSnapshotStore {
 
   async prepare(
     exec: ToolRunContext, runtime: PtcRuntime, stateOwner: object, cwd: string, policy: SandboxExecutionPolicy, signal: AbortSignal,
-  ): Promise<{ restored: string[]; omitted: string[] }> {
+  ): Promise<{ restored: string[]; omitted: string[]; warning?: string }> {
     if (!this.enabled()) return { restored: [], omitted: [] }
     const session = this.session(exec)
     const projections = this.ctx.get('sessionProjections')
@@ -184,13 +184,17 @@ export class SessionSnapshotStore {
     if (probe.value !== false) throw new Error('无法确认 CodeBridge 快照环境；尚未执行用户代码。')
     const projection = this.projection?.stateOf(session)
     if (projection === undefined) throw new Error('CodeBridge 快照 projection 未注册；尚未执行用户代码。')
-    if (projection.invalid) throw new Error('最新 CodeBridge 快照记录损坏；请关闭恢复以清除记录后继续。')
+    if (projection.invalid) throw new Error('最新 CodeBridge 快照记录损坏；可用 resetState: true 清除本会话基线后继续。')
     const record = projection.record === null ? undefined : parseSnapshotRecord(projection.record)
-    if (projection.record !== null && record === undefined) throw new Error('CodeBridge 快照记录验证失败；尚未执行用户代码。')
+    if (projection.record !== null && record === undefined) throw new Error('CodeBridge 快照记录验证失败；可用 resetState: true 清除本会话基线后继续。')
     // Fork prefixes belong to the source session, not to the child session.
-    const ownRecord = record?.sessionId === String(session.id) ? record : undefined
+    let ownRecord = record?.sessionId === String(session.id) ? record : undefined
+    let warning: string | undefined
     if (ownRecord?.policy && (ownRecord.policy.mode !== policy.mode || ownRecord.policy.workspaceRoot !== policy.workspaceRoot)) {
-      throw new Error('CodeBridge 快照的文件权限或工作区已变化；请关闭恢复以清除旧快照后继续。')
+      const cleared = await this.clear(exec)
+      if (cleared.warning !== undefined) throw new Error(cleared.warning)
+      ownRecord = undefined
+      warning = '快照的文件权限或工作区已变化；已清除本会话的旧恢复基线。'
     }
     const entries = ownRecord?.entries ?? []
     try {
@@ -205,7 +209,7 @@ export class SessionSnapshotStore {
     }
     state.variables = new Map(entries.map(entry => [entry.name, entry.kind]))
     state.unsupported = new Set(ownRecord?.omitted ?? [])
-    return { restored: entries.map(entry => entry.name), omitted: ownRecord?.omitted ?? [] }
+    return { restored: entries.map(entry => entry.name), omitted: ownRecord?.omitted ?? [], ...(warning === undefined ? {} : { warning }) }
   }
 
   private async persist(session: Session, record: SnapshotRecord): Promise<SnapshotStatus> {
@@ -221,8 +225,10 @@ export class SessionSnapshotStore {
       try {
         const stored = (await handle.read(seq, 1)).events[0]
         const plugin = stored === undefined ? undefined : pluginRecordOf(stored)
-        const data = plugin?.type === RECORD_TYPE && plugin.seq === seq ? parseSnapshotRecord(plugin.data) : undefined
-        if (data === undefined || JSON.stringify(data) !== JSON.stringify(record)) throw new Error('flush 后未读回当前快照记录，可能没有活动的会话 writer。')
+        // The exact payload was already validated before append. Compare the whole normalized record,
+        // without decoding entry JSON and running the snapshot codec again.
+        const storedRecord = plugin?.type === RECORD_TYPE && plugin.seq === seq ? RecordSchema.safeParse(plugin.data) : undefined
+        if (!storedRecord?.success || JSON.stringify(storedRecord.data) !== JSON.stringify(record)) throw new Error('flush 后未读回当前快照记录，可能没有活动的会话 writer。')
       } finally {
         await handle.close()
       }
@@ -272,8 +278,9 @@ export class SessionSnapshotStore {
       if (this.ctx.get('sessionProjections') === undefined) throw new Error('自动数据快照需要 sessionProjections 服务。')
       const state = this.owners.get(owner)
       if (state === undefined) throw new Error('当前环境尚未 prepare，不能在用户代码执行后安装安全快照 helper。')
-      for (const variable of collectSnapshotVariables(code)) { state.variables.set(variable.name, variable.kind); state.unsupported.delete(variable.name) }
-      for (const name of collectUnsupportedSnapshotNames(code)) { state.variables.delete(name); state.unsupported.add(name) }
+      const declarations = collectTopLevelDeclarations(code)
+      for (const variable of declarations.variables) { state.variables.set(variable.name, variable.kind); state.unsupported.delete(variable.name) }
+      for (const name of declarations.unsupported) { state.variables.delete(name); state.unsupported.add(name) }
       const variables: SnapshotVariable[] = [...state.variables].map(([name, kind]) => ({ name, kind }))
       omitted = [...state.variables.keys(), ...state.unsupported]
       const result = await this.run(runtime, owner, cwd, policy, signal, snapshotCaptureProgram(state.marker, variables))

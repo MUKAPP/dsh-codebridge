@@ -9,6 +9,9 @@ export const STATE_MODE_CONTEXT = 'codebridge:execution-state'
 /** 当前环境和恢复设置，不保证历史绑定仍存在。 */
 export function executionStateText(config: Config, retained?: boolean): string {
   const restore = config.restoreOnRestart.get()
+  if (retained === false && !restore) {
+    return 'CodeBridge 代码执行状态：当前没有可续用的执行环境；重启恢复：关闭。切换恢复设置后，下一次调用会清空旧执行环境与恢复基线（隔离调用除外）。'
+  }
   const retention = retained === undefined
     ? '会话状态：按次决定，以最近一次非隔离调用的 stateRetained 为准。'
     : retained
