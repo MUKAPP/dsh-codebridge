@@ -3,17 +3,33 @@ import { CodeBlock, DisclosureRow, IconCodeOutlineRegular, IconInspectOutlineReg
 import type { ToolCallViewProps } from '@deepseek-ai/dsh-client-ui-tool/client'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from './tool-locales.js'
-import { formatCode } from './format-code.js'
 import type { FormattedCode } from './format-code.js'
+
+declare const require: { async(specifier: string): Promise<typeof import('./format-code.js')> }
+
+async function formatCode(source: string): Promise<FormattedCode> {
+  try {
+    const formatter = await require.async('./client.formatter.js')
+    return await formatter.formatCode(source)
+  } catch {
+    return { code: source, failed: true }
+  }
+}
 
 type CodeBridgeToolViewProps = ToolCallViewProps & PropsLocale<'codebridge.tool'>
 
-function inputSource(raw: string | null): string | null {
+function parseInput(raw: string | null): { source: string; options: string[] } | null {
   if (raw === null) return null
   try {
     const args: unknown = JSON.parse(raw)
     if (typeof args === 'object' && args !== null && !Array.isArray(args) && 'code' in args && typeof args.code === 'string') {
-      return args.code
+      const options: string[] = []
+      if ('retainState' in args && args.retainState === true) options.push('retainState: true')
+      if ('isolated' in args && args.isolated === true) options.push('isolated: true')
+      if ('resetState' in args && args.resetState === true) options.push('resetState: true')
+      if ('timeoutMs' in args && typeof args.timeoutMs === 'number') options.push('timeoutMs: ' + args.timeoutMs)
+      if ('maxInlineBytes' in args && typeof args.maxInlineBytes === 'number' && args.maxInlineBytes !== 32_768) options.push('maxInlineBytes: ' + args.maxInlineBytes)
+      return { source: args.code, options }
     }
   } catch {
     // Rejected calls may retain malformed argument JSON. Show the original input.
@@ -25,7 +41,8 @@ function inputSource(raw: string | null): string | null {
 export function CodeBridgeToolView({ phase, block, toolName, inspect, useDisclosure, t }: CodeBridgeToolViewProps) {
   const { expanded, toggle } = useDisclosure()
   const raw = 'kind' in block ? block.call?.argsRaw ?? null : block.phase === 'start' ? block.argsRaw : null
-  const source = useMemo(() => inputSource(raw), [raw])
+  const input = useMemo(() => parseInput(raw), [raw])
+  const source = input?.source ?? null
   const cache = useRef<{ source: string; result: Promise<FormattedCode> } | null>(null)
   const [formatted, setFormatted] = useState<(FormattedCode & { source: string }) | null>(null)
 
@@ -40,19 +57,23 @@ export function CodeBridgeToolView({ phase, block, toolName, inspect, useDisclos
   }, [expanded, source])
 
   const output = useMemo(() => {
-    if (!('kind' in block)) return null
+    if (!expanded || !('kind' in block)) return null
     const parts = block.content.map(part => part.type === 'text' ? part.text : JSON.stringify(part, null, 2))
     if (parts.length === 0 && block.error !== undefined) parts.push(`${block.error.name}: ${block.error.code}`)
     return parts.join('\n') || null
-  }, [block])
+  }, [block, expanded])
   const stopped = 'kind' in block && block.error?.code === 'interrupted'
   const failed = 'kind' in block && (block.isError || (typeof block.meta === 'object' && block.meta !== null
     && !Array.isArray(block.meta) && 'stopped' in block.meta && block.meta.stopped === true))
   const state = stopped ? 'stopped' : failed ? 'error' : phase === 'result' ? 'ok' : phase === 'preparing' ? 'preparing' : 'running'
   const description = block.args.text('description')?.split('\n', 1)[0] ?? ''
-  const summary = failed && !stopped && output !== null ? output.split('\n', 1)[0] : description
+  const firstPart = 'kind' in block ? block.content[0] : undefined
+  const errorSummary = failed && !stopped && 'kind' in block
+    ? (firstPart?.type === 'text' ? firstPart.text.split('\n', 1)[0] : block.error?.name)
+    : undefined
+  const summary = errorSummary || description
   const ready = formatted?.source === source ? formatted : null
-  const expandable = raw !== null || output !== null || inspect !== undefined
+  const expandable = raw !== null || ('kind' in block && (block.content.length > 0 || block.error !== undefined)) || inspect !== undefined
 
   const fallbackInput = source === null ? raw : null
 
@@ -76,7 +97,9 @@ export function CodeBridgeToolView({ phase, block, toolName, inspect, useDisclos
       }, t(stopped ? 'stopped' : 'failed')) : undefined,
     }, expanded ? createElement('div', { className: 'codebridge-tool__body' },
       source !== null ? createElement(Fragment, null,
-        createElement('span', { className: 'codebridge-tool__input-label' }, t('input')),
+        createElement('div', { className: 'codebridge-tool__input-header' },
+          createElement('span', { className: 'codebridge-tool__input-label' }, t('input')),
+          input?.options.map(option => createElement('code', { key: option, className: 'codebridge-tool__option' }, option))),
         createElement('div', { className: 'codebridge-tool__code-scroll' },
           createElement(CodeBlock, {
             code: ready?.code ?? source,

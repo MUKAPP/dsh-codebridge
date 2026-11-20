@@ -54,6 +54,19 @@ export const TOOL_STYLES = `
   color: var(--dsw-alias-label-caption);
 }
 
+.codebridge-tool__input-header {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+}
+
+.codebridge-tool__option {
+  font: var(--dsw-font-markdown-code-block-small);
+  color: var(--dsw-alias-label-secondary);
+  overflow-wrap: anywhere;
+}
+
 .codebridge-tool__code-scroll {
   max-height: 360px;
   overflow: auto;
