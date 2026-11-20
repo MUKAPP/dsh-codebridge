@@ -15,7 +15,7 @@ export function createDescribeTool(ctx: Context, config: import('./config.js').C
   const tools = ctx.tools
   return defineTool({
     name: DESCRIBE_NAME,
-    description: '工具选择入口：单步任务可直接调用原生工具；当任务需要两个或更多工具、循环、条件判断、批量筛选、分页处理或汇总时，应先用本工具查询结构，再优先用 codebridge_exec 在一次代码执行中完成编排。query 按名称或描述筛选，默认仅返回摘要，空字符串浏览全部。用 names 按需查询完整参数及规范 JSON 返回结构，或 detail 显式选择 summary/full。diagnostics:true 只读检查会话及专用运行时，不执行代码。',
+    description: '工具选择入口：单步任务可直接调用原生工具；当任务需要两个或更多工具、循环、条件判断、批量筛选、分页处理或汇总时，应先用本工具查询结构，再优先用 codebridge_exec 在一次代码执行中完成编排。已知工具名时用 names 直接查询完整参数及规范 JSON 输出；未知工具名时用 query 按名称或描述搜摘要，空字符串浏览全部。可用 detail 选择 summary/full。diagnostics:true 只读检查会话及专用运行时，不执行代码。',
     parameters: {
       names: { type: 'array', items: { type: 'string' }, description: '精确工具名称，去重后查询；默认返回完整结构。与非空 query 互斥；忽略 offset/limit。' },
       query: { type: 'string', description: '不区分大小写的名称或描述子串；空字符串浏览全部可见工具。默认返回摘要，按名称排序。' },
@@ -63,6 +63,7 @@ export function createDescribeTool(ctx: Context, config: import('./config.js').C
       if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('offset 必须是非负安全整数。')
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error('limit 必须是 1–100 的整数。')
       const diagnostics = args.diagnostics ? collectDiagnostics(ctx, exec, config) : undefined
+      if (!searching && !hasNames) return { tools: [], unavailable: [], diagnostics }
       const schemas = new Map(tools.schemas(exec.agent, exec.toolSet).map(schema => [schema.name, schema]))
       const query = args.query?.trim().toLowerCase() ?? ''
       const matches = searching ? [...schemas.values()].filter(schema =>
