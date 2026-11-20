@@ -2,61 +2,62 @@
 
 # CodeBridge
 
-让 **DSH 标准模式**也能用代码调用工具：执行 JavaScript / TypeScript，由模型按次决定是否保留变量、函数、导入和中间结果，通过 `tools.*` 完成多步操作，再把需要的结果返回给模型。原有工具仍可直接调用。
+让 **DSH 标准模式**也能用代码调用工具：在专用的会话级 Node TypeScript REPL 中执行代码，由模型按次决定是否保留变量、函数、导入与中间结果，通过 `tools.*` 编排多步操作，再把需要的结果返回给模型。原有原生工具仍可直接调用。
 
 **DSH 版本要求：`<0.3` · Node.js `>=24.9.0` · MIT**
 
+## 核心能力
+
+- **按任务复杂度选择调用方式**：单步读取、写入或查询直接调用原生工具；需要两个及以上工具、循环、条件判断、批量筛选、分页或汇总时，先查工具结构，再用 `codebridge_exec` 一次编排完成。
+- **模型按次控制状态保留**：默认执行后释放环境；需要连续处理时传入 `retainState: true` 保留变量、函数与导入，最后一步释放；也支持临时隔离（`isolated: true`）与单会话重置（`resetState: true`）。
+- **可选重启数据恢复**：按 profile 开启后，自动持久化受支持的顶层 JSON 数据变量，进程重启后按原变量名恢复，不重跑历史代码。
+- **先搜索摘要，再查结构**：通过 `codebridge_tools` 按名称或描述筛选当前代理可见工具，按需获取参数与规范返回值 schema，或执行只读环境诊断。
+- **可恢复的大输出预览**：展示正文超过字节预算时，通过宿主 `spillStore` 保存完整 JSON，仅展示首尾预览并附取回位置，规范返回值保持完整。
+- **沿用当前会话权限**：每个子调用经过完整 DSH 工具管线，保留可见性检查、审批、取消与调用记录；文件与网络操作遵循宿主沙箱策略。
+- **与 PTC Plus 共存**：通过 `ptcRuntime` 命名隔离绑定专用官方 Node 运行时，避免公共运行时被接管后丢失超时或沙箱能力。
+- **优化的代码输入视图**：在 Web GUI 展开 `codebridge_exec` 时提供 TypeScript 语法高亮、行号、复制/换行与按需格式化展示（不修改实际执行的源码）。
+
+> 标准模式的原生工具 schema 仍会保留，CodeBridge 不承诺固定的 token 节省比例。
+
 ## 安装
 
-在 DSH 的 **插件 → 添加插件** 中输入 `dsh-codebridge`，即可从 npm 安装预编译包。也可输入 `dsh-codebridge@0.1.6` 指定版本。命令行安装到 `web` profile：
+### 通过 DSH 插件管理器（推荐）
+
+在 DSH 左侧打开 **插件 → 添加插件**，输入 `dsh-codebridge` 即可从 npm 安装预编译包（也可输入 `dsh-codebridge@0.1.7` 指定版本）。
+
+使用命令行安装到指定 profile（例如 `web`）：
 
 ```sh
 dsh plugin --profile web add dsh-codebridge
 ```
 
-也可从 [GitHub Releases](https://github.com/MUKAPP/dsh-codebridge/releases) 获取已发布版本的 `.tgz`，将 Assets 下的下载地址粘贴到同一入口。npm 和 Release 安装包都已编译，无需批准 CodeBridge 的源码构建脚本。
+### 其他安装方式
 
-需要从源码安装时，可在同一入口输入 `https://github.com/MUKAPP/dsh-codebridge.git`。如果管理器提示构建脚本待批准，核对脚本后选择允许并重试。安装完成后按管理器提示启用或重启 DSH。仅刷新浏览器页面不会重新加载 Host 插件。
+- **GitHub Releases**：从 [GitHub Releases](https://github.com/MUKAPP/dsh-codebridge/releases) 复制目标版本 Assets 下的 `.tgz` 下载地址，粘贴到 **添加插件** 入口。npm 与 Release 安装包均为预编译产物，无需批准源码构建脚本。
+- **源码安装**：在同一入口输入 `https://github.com/MUKAPP/dsh-codebridge.git`。若管理器提示构建脚本待批准，核对脚本后允许并重试。
 
-安装会影响使用该 profile 的所有会话。`<0.3` 是插件管理器的版本检查范围，不含 `0.3.0` 的预发布版。构建使用 DSH `0.2.2-rc.3` SDK；通过版本检查不代表插件已在该宿主版本上验证。
+### 安装与版本说明
 
-## 能做什么
+- 安装完成后按管理器提示启用或重启 DSH；**仅刷新浏览器页面不会重新加载 Host 插件**。
+- 安装会影响使用该 profile 的所有会话。
+- `<0.3` 为插件管理器的版本检查范围（不含 `0.3.0` 预发布版）。构建基于 DSH `0.2.2-rc.3` SDK，通过版本检查不代表插件已在该宿主版本上完成全部验证。
 
-- **模型按次决定状态保留**：默认执行后释放环境；需要连续处理时，模型通过 `retainState: true` 保留变量、函数和导入，最后一步可释放状态。
-- **可选重启数据恢复**：自动保存受支持的顶层 JSON 数据变量，重启后按原变量名恢复，不重新运行历史代码。
-- **用代码串联工具**：支持条件判断、循环、结果筛选和汇总，减少模型往返与中间结果回传。
-- **先搜索摘要，再查结构**：按名称或描述筛选当前可用工具，再按需获取参数和规范返回值 schema；也可只读检查环境。
-- **按任务复杂度选择调用方式**：单步读取、写入或查询直接调用原生工具；需要两个或更多工具、循环、条件判断、批量筛选、分页处理或汇总时，先查询结构，再优先用 `codebridge_exec` 编排。
-- **可恢复的大输出预览**：全文保存成功后缩短展示，保留规范 JSON，并给出取回位置。
-- **沿用当前会话权限**：每个子调用经过 DSH 工具管线，保留可见性检查、审批、取消和调用记录。
-- **与 PTC Plus 共存**：使用专用官方 Node 运行时，避免公共运行时被接管后丢失超时或沙箱能力。
-
-标准模式的工具 schema 仍会保留，CodeBridge 不承诺固定的 token 节省比例。
-
-## 工具与用法
+## 工具速览
 
 | 工具 | 参数 | 用途 |
 | --- | --- | --- |
-| `codebridge_exec` | `code`、`description`、可选 `retainState`、`isolated`、`timeoutMs`、`maxInlineBytes` | 执行代码并返回日志与结果，大输出可预览并保留全文 |
-| `codebridge_tools` | `names` 或 `query`，可选 `detail`、`offset`、`limit`、`diagnostics` | 搜索摘要、按需查询完整结构或只读检查环境 |
+| `codebridge_tools` | `names` 或 `query`，可选 `detail`、`offset`、`limit`、`diagnostics` | 搜索工具摘要、查询完整参数与输出结构，或只读诊断环境 |
+| `codebridge_exec` | `code`、`description`，可选 `retainState`、`isolated`、`resetState`、`timeoutMs`、`maxInlineBytes` | 在会话级 TypeScript REPL 中执行代码并调用 `tools.*` |
 
-### 先查询，再调用
+### 基本流程：先查询，再执行
 
-不知道工具名时，先让模型调用 `codebridge_tools` 搜索名称或描述：
-
-```json
-{ "query": "文件", "limit": 20 }
-```
-
-搜索不区分大小写，按去除首尾空白后的子串匹配；`query: ""` 浏览全部可见工具。默认仅返回名称和说明，不附带参数与返回结构。结果按名称排序，`total` 是匹配总数；有后续页时返回 `nextOffset`，以相同查询和该 `offset` 继续。`limit` 默认为 20，范围 1–100，`offset` 默认为 0。每次查询使用当时的可见工具集合，并遵守当前模型步骤的工具准入结果，不是固定快照。
-
-找到目标后，用精确名称查询完整结构，例如：
+1. **搜索或查询工具结构**（已知工具名直接用 `names`，未知工具名先用 `query` 搜索摘要）：
 
 ```json
 { "names": ["working_directory"] }
 ```
 
-`names` 查询保留原有行为：`tools` 默认包含名称、说明、完整 `parameters` 和 `output`；`unavailable` 列出不可用名称。可用 `detail: "summary"` 或 `detail: "full"` 显式选择返回内容。非空 `names` 与非空 `query` 不能同时使用；名称查询允许附带空 `query`，并忽略 `offset`、`limit`，始终查询全部指定名称。分页参数仅在 `query` 搜索时生效，仅诊断时也会忽略；`diagnostics: true` 可单独请求或与任一查询组合。查询始终排除不可见工具、CodeBridge 自身和 `run_code`。确认参数后，即可调用 `codebridge_exec`：
+2. **执行编排代码**（支持顶层 `await` 与最后一个表达式作为返回值）：
 
 ```json
 {
@@ -66,151 +67,31 @@ dsh plugin --profile web add dsh-codebridge
 }
 ```
 
-`code` 是 TypeScript REPL 源码，支持顶层 `await` 和最后一个表达式，同一会话中此前保留的声明与导入可被本次调用复用，无需再包一层函数。工具名与返回结构以当前会话查询结果为准；代码收到的是工具的规范 JSON，可能与原生工具展示的文本不同。子工具失败会抛出可捕获的 `ToolCallError`，包含 `name`、`toolName` 和 `message`。
+3. **多步连续处理**：第一步传入 `"retainState": true` 保留环境，后续步骤复用已有变量或函数；若中途需穿插一次性任务，传入 `"isolated": true` 避免影响共享状态；最后一步使用默认 `retainState: false` 释放环境。
 
-`retainState` 默认为 `false`：本次仍可使用此前保留或恢复的数据，执行和子工具收尾后释放环境并清除恢复基线；下一次调用从新环境开始。后续还需要复用变量、函数或导入时，模型应显式传入 `true`。
+## 插件设置
 
-`isolated: true` 让本次代码在全新的临时 REPL 里运行，不读取、更新或清除共享环境及重启快照；调用结束只丢弃临时状态。适合穿插一次性任务后继续之前的工作。不能与 `retainState: true` 或 `resetState: true` 同用，也不改变当前目录、工具权限或文件沙箱。
+在左侧 **插件 → CodeBridge** 详情页的 **设置** 区可调整以下配置，点击 **保存更改** 后生效（选择 **恢复继承值** 后同样需要保存）：
 
-`resetState: true` 在执行前释放本会话的共享 REPL 并清除重启恢复基线，不修改 profile 设置或其他会话。只想清除状态时可使用 `code: "void 0"` 和默认的 `retainState: false`；清除失败时不会执行代码。这不会删除历史会话日志。
-
-例如第一次调用设置 `retainState: true`，准备数据：
-
-```js
-const values = [12, 8, 5]
-function total() { return values.reduce((sum, value) => sum + value, 0) }
-total()
-```
-
-中间可用 `isolated: true` 运行独立代码，例如 `const values = [1, 2]; values.length`。之后切回共享调用，`values` 仍是最初的 `[12, 8, 5]`。若这是最后一步，可以设置 `retainState: false`，完成计算后释放状态：
-
-```js
-values.filter(value => value >= 8).map(value => value * 2)
-```
-
-`retainState: true` 默认只在当前进程内保留会话状态。开启下文的“重启后恢复”后，插件会额外保存支持的顶层 JSON 数据变量，进程重启后从最近快照恢复数据；函数、模块和句柄不恢复。文件写入、网络请求和其他外部副作用不会因为代码失败而回滚。
-
-代码工具的规范返回值包含 `logs` 和 `stateRetained`，并可包含 `result`、`sandbox`、`preview` 和 `snapshot`。`console.log()` 写入日志，最后一个表达式提供 `result`；返回值必须是无损 JSON。`stateRetained` 表示本次成功调用结束后是否保留执行环境，隔离调用返回 `isolated: true`、`stateRetained: false`，表示临时环境已释放，不能据此判断原共享环境不存在。日志和返回值同时存在时会分区标明。
-
-### 调用输入展示
-
-在 Web GUI 展开 `codebridge_exec` 时，输入区直接显示 `code`，使用 TypeScript 语法高亮、行号和代码复制/换行控件；输入标题旁显示非默认执行选项。首次展开代码时按需加载独立的格式化模块，按两空格缩进、单引号、保留分号和行宽 100 格式化；长代码可在输入区滚动查看。
-
-格式化仅用于展示，不修改实际执行的源码或原始调用记录，也不读取项目的格式化配置。等待格式化时先显示原始代码；格式化模块不可用或源码无法格式化时，继续以原文高亮展示并提示。缺少字符串 `code` 或参数 JSON 无法解析时保留原始输入。输出、失败内容和子调用仍可查看；`codebridge_tools` 与其他工具的展示不变。
-
-更新后需重新加载插件并刷新 Web 页面，才能使用新的输入视图。
-
-### 大输出与全文访问
-
-`maxInlineBytes` 控制展示正文的 UTF-8 字节预算，默认为 `32768`（32 KiB），允许 `1024`–`262144`，不含预览说明与取回提示。超过预算时，插件使用宿主已挂载的 `spillStore` 保存完整 JSON，再展示首尾预览。规范返回值中的 `logs`、`result` 不截断；新增的 `preview` 提供 `text`、`locator`、完整文件 `bytes` 和 `retrievalHint`。预览文本可能在 JSON 中间省略，不能当作完整 JSON 解析。
-
-完整 JSON 包含日志、返回值及可用的沙箱信息；运行失败时保存运行时已返回的日志、错误及调用定位信息。按照 `locator` 和 `retrievalHint` 使用当前可用的读取工具取回；本地文件也可由后续代码在权限允许时读取并筛选。无需重新执行原操作。文件访问和保留期限仍由宿主策略决定。
-
-未挂载全文存储或保存失败时，插件保留完整展示并在宿主日志说明原因。此预算不改变 `codebridge-runtime` 的 `maxOutputBytes` 硬上限；运行时已拒绝的超限数据不保证可以找回。
-
-### 只读环境诊断
-
-调用 `codebridge_tools`：
-
-```json
-{ "diagnostics": true }
-```
-
-也可同时传入 `names` 查询工具结构。返回的 `diagnostics` 包括当前目录、会话文件权限、专用运行时的语言/执行形式/隔离类型/状态保留范围/恢复限制/超时能力，以及全文存储是否已挂载。`stateRetention: "model-controlled"` 表示支持由模型按次决定是否保留运行环境；`stateRecovery: "process-only"` 表示未启用重启恢复，`"json-snapshot"` 表示已启用受限的 JSON 数据快照。诊断中的 `restoreOnRestart` 反映当前恢复设置；共享环境的保留情况以最近一次非隔离执行结果的 `stateRetained` 和最新状态提示为准。`configurationReady` 仅表示这些配置检查未发现问题；不会启动进程、检查目录存在性、修改配置或证明沙箱完整隔离。输出硬上限请查看运行时配置。
-
-专用运行时缺失时，应恢复整个 `dsh-codebridge` 组合包及其命名隔离配置；单独启用公共 Node 运行时可能无效。
-
-### 长任务与取消收尾
-
-执行过程沿用宿主的原生工具卡片和子调用树，可查看每次调用的详细结果；CodeBridge 不再向聊天流额外插入运行状态块。
-
-取消、超时和程序提前返回仍会等待运行时、在途子调用及日志收尾；已开始的全文保存也会等待结束。运行时 `console.log` 仍在最终结果中返回，不是实时日志流。移除状态块不改变串行执行或取消语义。
-
-### 失败定位
-
-外层失败报告会标明运行阶段、调用标识、运行时错误类别和处理建议；存在失败子调用时，还会附最近失败工具及子调用标识。最近失败的子调用可能已经被代码捕获，不一定是最终异常的原因。子调用管线或持久记录失败仍会使整个执行失败。
-
-`ToolCallError` 仍仅保证 `name`、`toolName`、`message`；不新增代码侧 `error.code`，不自动重试。已发生的操作不会回滚，重试前应核查其实际结果。
-
-## 执行规则
-
-- **子调用串行**：提交多个 Promise 也不代表工具并行。所有异步工具调用都要 `await`，程序结束时未完成的调用会被取消并等待收尾。取消或超时后仍需等待在途工具、日志及已开始的全文保存结束，`timeoutMs` 不代表包含这些收尾工作的总返回时限。
-- **会话状态**：非隔离调用结束后是否保留共享 REPL 由 `retainState` 决定；重启恢复仅覆盖受支持的数据快照，不是进程内存镜像。已发生的文件写入或外部请求不会因报错、超时而回滚。
-- **遵守作用域**：只能调用当前代理可见工具，不提供递归调用 CodeBridge 或 `run_code` 的入口。代码工具本身没有提权参数。
-- **沙箱沿用宿主**：Node 文件、网络和子进程操作受实际宿主策略约束。Windows 后端可能报告 `partial`，不能将其视为完整隔离。
-
-## 插件设置与重启恢复
-
-从左侧打开 **插件 → CodeBridge** 详情页，在介绍和组件列表之间的 **设置** 区调整“重启后恢复”。点击 **保存更改** 后生效；选择 **恢复继承值** 后也需保存。配置属于当前 profile，该 profile 下的会话共享恢复设置。会话状态保留仍由模型按次决定。
-
-每次模型请求前，插件都会提供当前的 **CodeBridge 代码执行状态**：说明当前是否有可续用的执行环境以及重启恢复是否开启。每次调用保留或释放状态后，后续请求会读取最新环境状态；恢复设置热更新后也直接读取新值，无需模型主动查询诊断；即使关闭宿主的可选运行时上下文，这条状态提示也会保留。提示反映当前环境和恢复设置，不保证对话历史中的旧变量仍然存在，恢复情况仍以实际工具结果为准。
-
-| 设置 | 配置键 | 默认 | 行为 |
+| 设置 | 配置键 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| 重启后恢复 | `restoreOnRestart` | 关闭 | 只为 `retainState: true` 的调用保存受支持的顶层 JSON 数据变量；执行前可恢复此前保留的数据，释放状态会清除恢复基线 |
+| 重启后恢复 | `restoreOnRestart` | 关闭（`false`） | 仅对 `retainState: true` 的调用保存受支持的顶层 JSON 数据变量；重启后自动恢复数据，释放状态时清除恢复基线 |
 
-修改此设置会在各会话下一次非隔离调用前释放旧环境和恢复基线，避免重新打开开关时复活旧数据。若仅当前会话的文件权限或工作区发生变化，旧环境与不兼容的恢复基线只在当前会话失效；清除成功后从新环境执行，并在结果中提示。遇到损坏快照可使用 `resetState: true`，无需关闭全局恢复。恢复功能从新环境中的保留调用开始追踪顶层 `const`、`let`、`var` 声明，包括解构。后续保留调用会更新已追踪变量的快照；恢复只注入数据，不重跑原始代码，因此不会为了恢复数据而重复调用工具、写文件或发起网络请求。
+配置作用于当前 profile，该 profile 下的所有会话共享恢复开关；每次调用是否保留进程内环境仍由模型通过 `retainState` 决定。详见 [状态管理、重启恢复与运行时配置](docs/state-and-recovery.md)。
 
-只支持有限数字、字符串、布尔值、`null` 和普通 JSON 数组/数据对象。函数、模块、类实例、Promise、进程句柄、getter、Proxy、循环或共享引用等不在恢复范围；嵌套作用域及直接给 `globalThis` 添加的属性也不自动追踪。不支持的绑定会列入 `snapshot.omitted`，不能把没有列出的进程资源当作仍然存在。每次快照的完整记录上限为 1 MiB；超限会提示并使旧快照失效，不会把旧数据当成最新状态恢复。
+## 核心执行规则
 
-工具结果的 `snapshot.saved` 表示快照已保存并得到持久化确认，`restored` 列出本次恢复的变量，`warning` 说明旧基线失效、未保存或未保证持久的原因。代码已经执行成功但保存失败时不会自动重跑；若捕获快照时运行环境失效，会返回 `stateRetained: false` 并保留已完成的日志与结果；不要为获得快照而重复具有副作用的操作。已开始执行的非隔离调用若失败或取消，会使旧恢复基线失效，避免后续从旧数据误恢复。
+- **子调用串行执行**：即使代码中使用 `Promise.all`，子工具仍按顺序执行。所有异步工具调用必须 `await`，程序结束时未完成的调用会被取消并等待收尾。
+- **收尾与不回滚**：取消、超时或提前返回后，插件仍会等待运行时、在途子调用、日志及已开始的全文保存结束（`timeoutMs` 不包含这些收尾耗时）。已发生的文件写入或外部请求不会因报错或超时而回滚。
+- **严格遵守作用域**：仅绑定当前代理可见且可执行的工具，始终排除 CodeBridge 自身工具与 `run_code`，不提供任何提权参数。
+- **沿用宿主沙箱**：Node 文件、网络与子进程操作受当前会话宿主策略约束。Windows 后端可能报告 `partial`，不能将其视为完整隔离。
 
-快照与会话日志一起保存，可能包含代码读取的数据；开启前应确认适合保存这些数据。关闭恢复会停止保存并清除后续恢复基线，但不是物理删除旧会话日志中的历史数据。会话文件删除、损坏、权限策略变化或快照限制可能使数据无法恢复。
+## 详细文档
 
-## 配置与更新
-
-组合包包含 `codebridge` 工具条目和 `codebridge-runtime` 运行时条目。运行时使用 `persistent-in-memory`，同一会话共享一个专用 Node REPL；两者仅共享专用的 `ptcRuntime` 命名隔离，其他服务继续继承宿主。
-
-在插件配置中调整 `codebridge-runtime` 的运行限额：
-
-| 配置 | 默认值 | 含义 |
-| --- | --- | --- |
-| `executionMode` | `persistent-in-memory` | 每个会话保留一个 Node REPL；可选 JSON 数据快照恢复 |
-| `timeoutMs` | `120000` | 默认执行超时，毫秒 |
-| `maxTimeoutMs` | `600000` | 单次超时参数的上限，毫秒 |
-| `maxOutputBytes` | `67108864` | 日志与结果的合计输出上限，64 MiB |
-
-CodeBridge 要求 `codebridge-runtime` 保持 `persistent-in-memory` 和 `programFormat: "repl"`；手动改回 `per-call` 时，`codebridge_tools({ diagnostics: true })` 会报告配置未就绪，代码执行也会明确拒绝，避免把 REPL 末尾表达式误交给函数体 runtime。使用带 `process.pkg` 的单文件 DSH 宿主时，官方 runtime 还要求把持久 worker 配置为 `node-script`，并提供外部 Node executable 与 `process.js` bootstrap；当前组合包验证覆盖标准 Electron/Node 载体，单文件宿主需要按宿主部署方式补充这项 runtime 配置。
-
-升级后必须重新加载整个 `dsh-codebridge` 组合包，使工具与专用运行时一起更新为持久模式；仅刷新浏览器不会更换 Host runtime。卸载时关闭或移除整个组合包，等待会话资源释放。
-
-## 本地开发
-
-使用 pnpm `11.28.5`。克隆仓库后，在项目目录执行：
-
-```sh
-pnpm install --ignore-scripts --config.strict-dep-builds=false
-pnpm run typecheck
-pnpm run build
-pnpm test
-```
-
-安装命令跳过依赖安装脚本，并允许 pnpm 在跳过依赖构建时继续；随后显式编译 Host 与 Web 客户端。
-
-构建结果位于 `lib/`；测试使用这些构建结果。完成构建后，可在 DSH 插件管理器中以本项目的绝对目录作为本地安装来源。生成安装包：
-
-```sh
-pnpm pack --pack-destination artifacts
-```
-
-[独立验证入口](verification/run.mjs) 接受 Node 或 Electron 可执行文件路径及对应的 `dsh` CLI 入口，Electron 额外传入 `--electron`。它通过公开 CLI 在 `verification/.profile` 下创建独立环境，不需要模型 API key，也不改动现有 desktop profile。
-
-添加 `--restart` 可在 `verification/.profile/restart` 中运行真实 JSONL 持久化和三个独立 DSH Host 进程，验证变量恢复、不重复执行外部操作、会话隔离、设置服务热更新，以及隔离调用保留共享快照、释放后的数据在再次重启时不会恢复。
-
-已有验证覆盖工具可见性、规范 JSON、串行调度、取消与卸载、会话隔离，以及真实 Node 子进程中的超时恢复、深层 JSON 和只读写入拒绝。开发规则见 [AGENTS.md](AGENTS.md)。
-
-## 发布
-
-首次启用 npm 自动发布时，在 [npm 包页面](https://www.npmjs.com/package/dsh-codebridge)的 **Settings → Trusted publishing** 中添加 GitHub Actions 发布者：**Organization or user** 填 `MUKAPP`，**Repository** 填 `dsh-codebridge`，**Workflow filename** 填 `release.yml`，**Environment name** 留空，**Allowed actions** 勾选 `npm publish`。无需在 GitHub 配置 npm 令牌。新绑定需在两天内完成首次成功发布，详见 [npm 官方说明](https://docs.npmjs.com/trusted-publishers/)。
-
-将 [package.json](package.json) 的版本更新为 npm 尚未发布的版本，并推送包含该版本和发布工作流的提交。以 `0.1.6` 为例，在对应提交上创建并推送标签：
-
-```sh
-git tag -a v0.1.6 -m "Release v0.1.6"
-git push origin v0.1.6
-```
-
-[发布工作流](.github/workflows/release.yml)只在推送 `vX.Y.Z` 标签时运行。标签与包版本一致、类型检查和测试通过后，两个发布作业分别将同一份预编译 `.tgz` 上传到 npm 和 GitHub Releases。普通提交和 PR 不触发发布。某个发布作业失败时，可在构建产物的七天保留期内只重跑失败的作业，避免重复发布另一渠道。
+- [工具参考与用法](docs/tools-reference.md)：`codebridge_tools` 与 `codebridge_exec` 完整参数与返回结构、大输出预览与全文取回、只读环境诊断、取消收尾、失败定位与 Web GUI 输入展示。
+- [状态管理、重启恢复与运行时配置](docs/state-and-recovery.md)：共享/隔离/重置状态模型、动态状态提示、JSON 快照追踪与失效规则、`cordis.patch.yml` 命名隔离、`codebridge-runtime` 限额与单文件宿主适配。
+- [本地开发、验证与发布](docs/development-and-release.md)：本地构建与测试流程、`verification/run.mjs` 独立集成验证（含 `--electron` / `--restart`），以及 npm Trusted Publishing 与 GitHub Actions 发布流程。
+- [项目开发约定](AGENTS.md)：面向贡献者与 AI 编码代理的架构约束、代码入口与提交规范。
 
 ## 许可证
 

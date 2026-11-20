@@ -1,6 +1,6 @@
 {
   "name": "dsh-codebridge",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -19,7 +19,7 @@
     "./package.json": "./package.json",
     "./cordis.patch.yml": "./cordis.patch.yml"
   },
-  "files": ["lib", "cordis.patch.yml", "locale", "icon.svg", "README.md", "verification/run.mjs", "verification/probe.mjs", "verification/profile.patch.yml", "verification/restart-probe.mjs"],
+  "files": ["lib", "cordis.patch.yml", "locale", "icon.svg", "README.md", "AGENTS.md", "docs", "verification/run.mjs", "verification/probe.mjs", "verification/profile.patch.yml", "verification/restart-probe.mjs"],
   "engines": { "node": ">=24.9.0", "dsh": "<0.3" },
   "packageManager": "pnpm@11.28.5",
   "dsh": {
